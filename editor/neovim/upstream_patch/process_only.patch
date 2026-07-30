@@ -1,0 +1,431 @@
+diff --git a/src/gui/shell.cpp b/src/gui/shell.cpp
+index 8d4e034..9e64259 100644
+--- a/src/gui/shell.cpp
++++ b/src/gui/shell.cpp
+@@ -13,7 +13,6 @@
+ #include <QSettings>
+ #include <QShowEvent>
+ 
+-#include "app.h"
+ #include "compat_gui.h"
+ #include "helpers.h"
+ #include "input.h"
+@@ -581,6 +580,7 @@ void Shell::handleRedraw(const QByteArray& name, const QVariantList& opargs)
+ 			return;
+ 		}
+ 		setNeovimCursor(opargs.at(0).toULongLong(), opargs.at(1).toULongLong());
++		emit neovimCursorRectChanged(neovimCursorRectForHost());
+ 		// @zhmars: On my system, call update(Qt::ImCursorRectangle) in function
+ 		// setNeovimCursor will cause typing lags
+ 		qApp->inputMethod()->update(Qt::ImCursorRectangle);
+@@ -892,7 +892,7 @@ void Shell::handleNeovimNotification(const QByteArray &name, const QVariantList&
+ 		} else if (guiEvName == "Close") {
+ 			handleCloseEvent(args);
+ 		} else if (guiEvName == "NewWindow") {
+-			App::openNewWindow(args);
++			emit neovimNewWindowRequested(args);
+ 		} else if (guiEvName == "Option" && args.size() >= 3) {
+ 			QString option = m_nvim->decode(args.at(1).toByteArray());
+ 			handleExtGuiOption(option, args.at(2));
+@@ -1259,6 +1259,7 @@ void Shell::handleGridCursorGoto(const QVariantList& opargs)
+ 	const uint64_t column = opargs.at(2).toULongLong();
+ 
+ 	setNeovimCursor(row, column);
++	emit neovimCursorRectChanged(neovimCursorRectForHost());
+ 	qApp->inputMethod()->update(Qt::ImCursorRectangle);
+ }
+ 
+diff --git a/src/gui/shell.h b/src/gui/shell.h
+index d4d9216..c25a8a2 100644
+--- a/src/gui/shell.h
++++ b/src/gui/shell.h
+@@ -71,6 +71,10 @@ public:
+ 		T* pThis, const QVariantList& args) noexcept;
+ 
+ 	NeovimConnector* nvim() { return m_nvim; }
++	QRect neovimCursorRectForHost() const noexcept
++	{
++		return neovimCursorRect();
++	}
+ signals:
+ 	void neovimTitleChanged(const QString &title);
+ 	void neovimBusyChanged(bool);
+@@ -87,6 +91,8 @@ signals:
+ 	void neovimIsUnsupported();
+ 	void neovimShowContextMenu();
+ 	void colorsChanged();
++	void neovimCursorRectChanged(const QRect& rect);
++	void neovimNewWindowRequested(const QVariantList& args);
+ 
+ 	// GuiAdaptive Color/Font Signals
+ 	void setGuiAdaptiveColorEnabled(bool isEnabled);
+diff --git a/src/msgpackiodevice.cpp b/src/msgpackiodevice.cpp
+index 23ea6a9..87e0932 100644
+--- a/src/msgpackiodevice.cpp
++++ b/src/msgpackiodevice.cpp
+@@ -1,14 +1,3 @@
+-#include <QAbstractSocket>
+-#include <QSocketNotifier>
+-
+-// read/write
+-#ifdef _WIN32
+-# include <io.h>
+-# include "stdinreader.h"
+-#else
+-# include <unistd.h>
+-#endif
+-
+ #include "msgpackiodevice.h"
+ #include "util.h"
+ #include "msgpackrequest.h"
+@@ -22,27 +11,6 @@ namespace NeovimQt {
+  *
+  */
+ 
+-/**
+- * Build a MsgpackIODevice that reads from stdin and writes to
+- * stdout
+- */
+-MsgpackIODevice* MsgpackIODevice::fromStdinOut(QObject *parent)
+-{
+-	MsgpackIODevice *rpc = new MsgpackIODevice(NULL, parent);
+-	msgpack_packer_init(&rpc->m_pk, rpc, (msgpack_packer_write)MsgpackIODevice::msgpack_write_to_stdout);
+-#ifdef _WIN32
+-	StdinReader *rsn = new StdinReader(msgpack_unpacker_buffer_capacity(&rpc->m_uk), rpc);
+-	connect(rsn, &StdinReader::dataAvailable,
+-			rpc, &MsgpackIODevice::dataAvailableStdin);
+-	rsn->start();
+-#else
+-	QSocketNotifier *rsn = new QSocketNotifier(0, QSocketNotifier::Read, rpc);
+-	connect(rsn, &QSocketNotifier::activated,
+-			rpc, &MsgpackIODevice::dataAvailableFd);
+-#endif
+-	return rpc;
+-}
+-
+ MsgpackIODevice::MsgpackIODevice(QIODevice* dev, QObject* parent)
+ 	: QObject(parent)
+ 	, m_reqid(0)
+@@ -58,7 +26,7 @@ MsgpackIODevice::MsgpackIODevice(QIODevice* dev, QObject* parent)
+ 		msgpack_packer_init(&m_pk, this, (msgpack_packer_write)MsgpackIODevice::msgpack_write_to_dev);
+ 
+ 		m_dev->setParent(this);
+-		connect(m_dev, &QAbstractSocket::readyRead,
++		connect(m_dev, &QIODevice::readyRead,
+ 				this, &MsgpackIODevice::dataAvailable);
+ 		connect(m_dev, &QIODevice::aboutToClose, this, &MsgpackIODevice::aboutToClose);
+ 
+@@ -86,16 +54,6 @@ bool MsgpackIODevice::isOpen()
+ 	}
+ }
+ 
+-int MsgpackIODevice::msgpack_write_to_stdout(void* data, const char* buf, unsigned long int len)
+-{
+-	MsgpackIODevice *c = static_cast<MsgpackIODevice*>(data);
+-	qint64 bytes = write(1, buf, len);
+-	if (bytes == -1) {
+-		c->setError(InvalidDevice, tr("Error writing to device"));
+-	}
+-	return bytes;
+-}
+-
+ int MsgpackIODevice::msgpack_write_to_dev(void* data, const char* buf, unsigned long int len)
+ {
+ 	MsgpackIODevice *c = static_cast<MsgpackIODevice*>(data);
+@@ -106,55 +64,6 @@ int MsgpackIODevice::msgpack_write_to_dev(void* data, const char* buf, unsigned
+ 	return bytes;
+ }
+ 
+-/**
+- * Process incoming data.
+- *
+- * \see fromStdinOut() and StdinReader()
+- */
+-void MsgpackIODevice::dataAvailableStdin(const QByteArray& data)
+-{
+-	if ( (quint64)data.length() > msgpack_unpacker_buffer_capacity(&m_uk)) {
+-		setError(InvalidDevice, tr("Error when reading from stdin, BUG(buffered data exceeds capaciy)"));
+-		return;
+-	} else if ( data.length() > 0 ) {
+-		memcpy(msgpack_unpacker_buffer(&m_uk), data.constData(), data.length());
+-		msgpack_unpacker_buffer_consumed(&m_uk, data.length());
+-		msgpack_unpacked result;
+-		msgpack_unpacked_init(&result);
+-		while(msgpack_unpacker_next(&m_uk, &result)) {
+-			dispatch(result.data);
+-		}
+-	}
+-}
+-
+-/**
+- * Process incoming data from the given fd.
+- *
+- * \see fromStdinOut() and QSocketNotifier()
+- */
+-void MsgpackIODevice::dataAvailableFd(int fd)
+-{
+-	if ( msgpack_unpacker_buffer_capacity(&m_uk) == 0 ) {
+-		if ( !msgpack_unpacker_reserve_buffer(&m_uk, 8192 ) ) {
+-			qFatal("Could not allocate memory in unpack buffer");
+-			return;
+-		}
+-	}
+-
+-	qint64 bytes = read(fd, msgpack_unpacker_buffer(&m_uk),
+-			msgpack_unpacker_buffer_capacity(&m_uk));
+-	if (bytes > 0) {
+-		msgpack_unpacker_buffer_consumed(&m_uk, bytes);
+-		msgpack_unpacked result;
+-		msgpack_unpacked_init(&result);
+-		while(msgpack_unpacker_next(&m_uk, &result)) {
+-			dispatch(result.data);
+-		}
+-	} else if (bytes == -1) {
+-		setError(InvalidDevice, tr("Error when reading from device"));
+-	}
+-}
+-
+ /**
+  * Process incoming data from the underlying device
+  *
+diff --git a/src/msgpackiodevice.h b/src/msgpackiodevice.h
+index 0810543..6d6b046 100644
+--- a/src/msgpackiodevice.h
++++ b/src/msgpackiodevice.h
+@@ -25,7 +25,6 @@ public:
+ 
+ 	MsgpackIODevice(QIODevice *, QObject *parent=0);
+ 	~MsgpackIODevice();
+-        static MsgpackIODevice* fromStdinOut(QObject *parent=0);
+ 
+ 	bool isOpen();
+ 	QString errorString() const;
+@@ -95,13 +94,10 @@ protected slots:
+ 	void setError(NeovimQt::MsgpackIODevice::MsgpackError err, const QString& msg);
+ 
+ 	void dataAvailable();
+-	void dataAvailableStdin(const QByteArray&);
+-	void dataAvailableFd(int fd);
+ 
+ 	void requestTimeout(quint32 id);
+ 
+ private:
+-	static int msgpack_write_to_stdout(void* data, const char* buf, unsigned long int len);
+ 	static int msgpack_write_to_dev(void* data, const char* buf, unsigned long int len);
+ 
+ 	quint32 m_reqid;
+diff --git a/src/msgpackrequest.cpp b/src/msgpackrequest.cpp
+--- a/src/msgpackrequest.cpp
++++ b/src/msgpackrequest.cpp
+@@ -24,6 +24,10 @@ MsgpackRequest::MsgpackRequest(quint32 id, MsgpackIODevice *dev, QObject *parent
+ {
+ 	connect(&m_timer, &QTimer::timeout,
+ 		this, &MsgpackRequest::requestTimeout);
++	connect(this, &MsgpackRequest::finished,
++		&m_timer, &QTimer::stop);
++	connect(this, &MsgpackRequest::error,
++		&m_timer, &QTimer::stop);
+ }
+ 
+ /**
+diff --git a/src/neovimconnector.cpp b/src/neovimconnector.cpp
+index 0d82d28..f1897d9 100644
+--- a/src/neovimconnector.cpp
++++ b/src/neovimconnector.cpp
+@@ -1,9 +1,6 @@
+ #include "neovimconnector.h"
+ 
+-#include <QFileInfo>
+-#include <QLocalSocket>
+ #include <QMetaMethod>
+-#include <QTcpSocket>
+ #include <QtGlobal>
+ 
+ #include "compat.h"
+@@ -97,10 +94,6 @@ QString NeovimConnector::connectionDescription()
+ 	switch (m_ctype) {
+ 		case SpawnedConnection:
+ 			return m_spawnExe + " " + m_spawnArgs.join(" ");
+-		case HostConnection:
+-			return m_connHost + ":" + QString::number(m_connPort);
+-		case SocketConnection:
+-			return m_connSocket;
+ 		default:
+ 			return "";
+ 	}
+@@ -119,7 +112,7 @@ QString NeovimConnector::connectionDescription()
+  */
+ void NeovimConnector::discoverMetadata()
+ {
+-	MsgpackRequest *r = m_dev->startRequestUnchecked("vim_get_api_info", 0);
++	MsgpackRequest *r = m_dev->startRequestUnchecked("nvim_get_api_info", 0);
+ 	connect(r, &MsgpackRequest::finished,
+ 			m_helper, &NeovimConnectorHelper::handleMetadata);
+ 	connect(r, &MsgpackRequest::error,
+@@ -294,100 +287,6 @@ NeovimConnector* NeovimConnector::spawn(const QStringList& params, const QString
+ 	return c;
+ }
+ 
+-/**
+- * Connect to Neovim using a local UNIX socket.
+- *
+- * This method also works in Windows, using named pipes.
+- *
+- * @see QLocalSocket
+- */
+-NeovimConnector* NeovimConnector::connectToSocket(const QString& path)
+-{
+-	QLocalSocket *s = new QLocalSocket();
+-	NeovimConnector *c = new NeovimConnector(s);
+-	c->m_ctype = SocketConnection;
+-#if defined(Q_OS_UNIX)
+-	// #936: Qt assumes paths relative to /tmp
+-	// https://bugreports.qt.io/browse/QTBUG-50877
+-	c->m_connSocket = QFileInfo(path).absoluteFilePath();
+-#else
+-	c->m_connSocket = path;
+-#endif
+-
+-#if (QT_VERSION < QT_VERSION_CHECK(5, 15, 0))
+-	connect(s, SIGNAL(error(QLocalSocket::LocalSocketError)),
+-			c, SLOT(socketError()));
+-#else
+-	connect(s, &QLocalSocket::errorOccurred, c, &NeovimConnector::socketError);
+-#endif
+-	connect(s, &QLocalSocket::connected,
+-			c, &NeovimConnector::discoverMetadata);
+-	s->connectToServer(c->m_connSocket);
+-	return c;
+-}
+-
+-/**
+- * Connect to a Neovim through a TCP connection
+- *
+- * @param host is a valid hostname or IP address
+- * @param port is the TCP port
+- */
+-NeovimConnector* NeovimConnector::connectToHost(const QString& host, int port)
+-{
+-	QTcpSocket *s = new QTcpSocket();
+-	NeovimConnector *c = new NeovimConnector(s);
+-
+-	c->m_ctype = HostConnection;
+-	c->m_connHost = host;
+-	c->m_connPort = port;
+-
+-#if (QT_VERSION < QT_VERSION_CHECK(5, 15, 0))
+-	connect(s, SIGNAL(error(QAbstractSocket::SocketError)),
+-			c, SLOT(socketError()));
+-#else
+-	connect(s, &QAbstractSocket::errorOccurred, c, &NeovimConnector::socketError);
+-#endif
+-	connect(s, &QAbstractSocket::connected,
+-			c, &NeovimConnector::discoverMetadata);
+-	s->connectToHost(host, port);
+-	return c;
+-}
+-
+-/**
+- * Connect to a running instance of Neovim (if available).
+- *
+- * This method gets the Neovim endpoint from the NVIM_LISTEN_ADDRESS environment
+- * variable, if it is not available a new Neovim instance is spawned().
+- *
+- * @see spawn()
+- */
+-NeovimConnector* NeovimConnector::connectToNeovim(const QString& server)
+-{
+-	QString addr = server;
+-	if (addr.isEmpty()) {
+-		 addr = QString::fromLocal8Bit(qgetenv("NVIM_LISTEN_ADDRESS"));
+-	}
+-	if (addr.isEmpty()) {
+-		return spawn();
+-	}
+-
+-	int colon_pos = addr.lastIndexOf(':');
+-	if (colon_pos != -1 && colon_pos != 0 && addr[colon_pos-1] != ':') {
+-		bool ok;
+-		int port = midString(addr, colon_pos + 1).toInt(&ok);
+-		if (ok) {
+-			QString host = addr.mid(0, colon_pos);
+-			return connectToHost(host, port);
+-		}
+-	}
+-	return connectToSocket(addr);
+-}
+-
+-NeovimConnector* NeovimConnector::fromStdinOut()
+-{
+-	return new NeovimConnector(MsgpackIODevice::fromStdinOut());
+-}
+-
+ /**
+  * Called when running embedded Neovim to report an error
+  * with the Neovim process
+@@ -408,12 +307,6 @@ void NeovimConnector::processError(QProcess::ProcessError err)
+ 	}
+ }
+ 
+-/** Handle errors from QLocalSocket or QTcpSocket */
+-void NeovimConnector::socketError()
+-{
+-	setError(SocketError, m_dev->errorString());
+-}
+-
+ /** Handle errors in MsgpackIODevice */
+ void NeovimConnector::msgpackError()
+ {
+@@ -466,10 +359,6 @@ NeovimConnector* NeovimConnector::reconnect()
+ 	switch(m_ctype) {
+ 	case SpawnedConnection:
+ 		return NeovimConnector::spawn(m_spawnArgs, m_spawnExe);
+-	case HostConnection:
+-		return NeovimConnector::connectToHost(m_connHost, m_connPort);
+-	case SocketConnection:
+-		return NeovimConnector::connectToSocket(m_connSocket);
+ 	default:
+ 		return NULL;
+ 	}
+diff --git a/src/neovimconnector.h b/src/neovimconnector.h
+index 7f96174..59bca40 100644
+--- a/src/neovimconnector.h
++++ b/src/neovimconnector.h
+@@ -1,7 +1,6 @@
+ #ifndef NEOVIM_QT_CONNECTOR
+ #define NEOVIM_QT_CONNECTOR
+ 
+-#include <QAbstractSocket>
+ #include <QObject>
+ #include <QProcess>
+ 
+@@ -63,11 +62,6 @@ public:
+ 	NeovimConnector(MsgpackIODevice* s);
+ 	static NeovimConnector* spawn(const QStringList& params=QStringList(),
+ 									const QString& exe="nvim");
+-	static NeovimConnector* connectToSocket(const QString&);
+-	static NeovimConnector* connectToHost(const QString& host, int port);
+-	static NeovimConnector* connectToNeovim(const QString& server=QString());
+-	static NeovimConnector* fromStdinOut();
+-
+ 	bool canReconnect();
+ 	NeovimConnector* reconnect();
+ 
+@@ -118,7 +112,6 @@ protected:
+ protected slots:
+ 	void discoverMetadata();
+ 	void processError(QProcess::ProcessError);
+-	void socketError();
+ 	void msgpackError();
+ 
+ private:
+@@ -142,9 +135,7 @@ private:
+ 	NeovimConnectionType m_ctype{ OtherConnection };
+ 	QStringList m_spawnArgs;
+ 	QString m_spawnExe;
+-	QString m_connSocket, m_connHost;
+ 	QVariantList m_uiOptions;
+-	int m_connPort;
+ 	bool m_ready{ false };
+ 	int m_timeout{ 20000 };
+ };

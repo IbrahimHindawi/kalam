@@ -43,6 +43,9 @@
 build/
 Build/
 build-*/
+out/
+/runtime/
+cmake-build-*/
 
 # CMake generated files
 CMakeFiles/
@@ -67,3 +70,18 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Kalam generated/runtime artifacts
+generated/
+cooked/
+*.hot.dll
+*.hot.pdb
+game_module_hot_*.dll
+game_module_hot_*.pdb
+
+# Editor and operating-system noise
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
