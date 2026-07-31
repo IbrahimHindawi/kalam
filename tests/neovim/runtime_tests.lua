@@ -296,6 +296,16 @@ for index, expected in ipairs(expected_actions) do
   )
 end
 
+local context_dispatch = dispatched_actions[1]
+check(
+  context_dispatch ~= nil
+    and type(context_dispatch.payload.screen_row) == "number"
+    and context_dispatch.payload.screen_row >= 0
+    and type(context_dispatch.payload.screen_column) == "number"
+    and context_dispatch.payload.screen_column >= 0,
+  "context dispatch captures the source cursor screen position"
+)
+
 vim.cmd("NvBuildReload")
 local legacy_dispatch = dispatched_actions[#dispatched_actions]
 check(
@@ -307,188 +317,6 @@ check(
 vim.api.nvim_del_autocmd(action_autocmd)
 check(vim.fn.exists(":NvEditForm") == 2, "NvEditForm command exists")
 check(vim.fn.exists(":NvBuildReload") == 2, "NvBuildReload command exists")
-
-local context_events = {}
-local context_event_autocmd = vim.api.nvim_create_autocmd("User", {
-  pattern = "NvEditorEvent",
-  callback = function(args)
-    if args.data and args.data.method
-        and args.data.method:match("^nveditor%.context_session_") then
-      table.insert(context_events, args.data)
-    end
-  end,
-})
-
-local origin_tab = vim.api.nvim_get_current_tabpage()
-local origin_window = vim.api.nvim_get_current_win()
-local origin_buffer = vim.api.nvim_get_current_buf()
-local prior_laststatus = vim.o.laststatus
-vim.o.laststatus = 3
-local session, session_error = nveditor.open_context_session({
-  source_buffer = origin_buffer,
-  json_path = "$.cube",
-  fields = {
-    { name = "tint", value_json = "[0.100,0.200,0.300,1.000]" },
-    { name = "enabled", value_json = "true" },
-  },
-})
-check(session ~= nil and session_error == nil, "context session opens")
-check(
-  vim.api.nvim_get_current_tabpage() == origin_tab,
-  "context session keeps the source tab visible"
-)
-local context_window_config = vim.api.nvim_win_get_config(session.window)
-check(
-  context_window_config.relative ~= ""
-    and session.window ~= origin_window,
-  "context session uses a separate Neovim floating window"
-)
-check(
-  session.window_width < vim.o.columns
-    and session.window_height < vim.o.lines,
-  "context staging window is compact rather than editor-sized"
-)
-check(vim.api.nvim_get_current_buf() == session.bufnr, "context buffer is current")
-check(vim.bo[session.bufnr].buftype == "acwrite", "context buffer is acwrite")
-check(vim.bo[session.bufnr].filetype == "json", "context buffer has JSON motions")
-check(not vim.bo[session.bufnr].modified, "context buffer starts clean")
-check(
-  vim.o.laststatus == 3,
-  "context window preserves the user's global statusline setting"
-)
-check(
-  vim.wo[session.window].statusline:match(":w apply") ~= nil
-    and vim.wo[session.window].statusline:match(":q cancel") ~= nil
-    and vim.wo[session.window].statusline:match(":wq apply%+close") ~= nil,
-  "context window has a real Neovim command statusline"
-)
-check(
-  table.concat(vim.api.nvim_buf_get_lines(session.bufnr, 0, -1, true), "\n")
-    == '{\n  "tint": [0.100,0.200,0.300,1.000],\n  "enabled": true\n}',
-  "context buffer stages named JSON fields"
-)
-
-local first_component_column = vim.api.nvim_win_get_cursor(session.window)[2]
-check(
-  first_component_column
-    == vim.api.nvim_buf_get_lines(session.bufnr, 1, 2, true)[1]:find("0.100", 1, true) - 1,
-  "context cursor starts on the first editable value"
-)
-vim.cmd("normal l")
-local second_component_column = vim.api.nvim_win_get_cursor(session.window)[2]
-check(
-  second_component_column > first_component_column,
-  "mapped l moves to the next projected component"
-)
-vim.cmd("normal h")
-check(
-  vim.api.nvim_win_get_cursor(session.window)[2] == first_component_column,
-  "mapped h moves to the previous projected component"
-)
-vim.cmd("normal j")
-local moved = nveditor.context_session(session.session_id)
-check(moved.cursor_row == 2, "mapped j moves to the next projected field")
-check(
-  moved.cursor_column
-    == vim.api.nvim_buf_get_lines(session.bufnr, 2, 3, true)[1]:find("true", 1, true) - 1,
-  "field motion lands on the next field's editable value"
-)
-vim.cmd("normal k")
-check(
-  nveditor.context_session(session.session_id).cursor_row == 1,
-  "mapped k moves to the previous projected field"
-)
-
-local updated, update_error = nveditor.update_context_session_field(
-  session.session_id,
-  "tint",
-  "[0.900,0.800,0.700,1.000]"
-)
-check(updated ~= nil and update_error == nil, "mouse-style field write-through succeeds")
-check(vim.bo[session.bufnr].modified, "mouse write-through marks Neovim modified")
-check(
-  vim.api.nvim_buf_get_lines(session.bufnr, 1, 2, true)[1]
-    == '  "tint": [0.900,0.800,0.700,1.000],',
-  "mouse write-through changes the staging line"
-)
-vim.cmd("undo")
-check(
-  vim.api.nvim_buf_get_lines(session.bufnr, 1, 2, true)[1]
-    == '  "tint": [0.100,0.200,0.300,1.000],',
-  "real Neovim undo restores a mouse-originated edit"
-)
-vim.cmd("redo")
-
-local quit_ok = pcall(vim.cmd, "quit")
-check(not quit_ok, "plain :q refuses a modified context buffer")
-check(
-  nveditor.context_session(session.session_id) ~= nil,
-  "failed :q leaves the context session open"
-)
-vim.cmd("quit!")
-check(vim.api.nvim_get_current_tabpage() == origin_tab, ":q! returns to the source tab")
-vim.wait(100, function()
-  return vim.api.nvim_get_current_win() == origin_window
-end, 5)
-check(vim.api.nvim_get_current_win() == origin_window, ":q! restores the source window")
-check(
-  vim.o.laststatus == 3,
-  "closing the context leaves the user's global-statusline setting untouched"
-)
-vim.o.laststatus = prior_laststatus
-local cancel_event = context_events[#context_events]
-check(
-  cancel_event ~= nil
-    and cancel_event.method == "nveditor.context_session_closed"
-    and not cancel_event.payload.write_pending,
-  ":q! reports a discard rather than a write"
-)
-
-session = assert(nveditor.open_context_session({
-  source_buffer = origin_buffer,
-  json_path = "$.tint",
-  fields = {
-    { name = "tint", value_json = "[0.100,0.200,0.300,1.000]" },
-  },
-}))
-assert(nveditor.update_context_session_field(
-  session.session_id,
-  "tint",
-  "[0.400,0.500,0.600,1.000]"
-))
-vim.cmd("write")
-local write_event = context_events[#context_events]
-check(
-  write_event ~= nil
-    and write_event.method == "nveditor.context_session_write"
-    and write_event.payload.session_id == session.session_id,
-  ":w dispatches the staged context through RPC"
-)
-check(
-  not vim.bo[session.bufnr].modifiable and not vim.bo[session.bufnr].modified,
-  "context buffer is locked while the asynchronous write is pending"
-)
-assert(nveditor.finish_context_session_write(session.session_id, true, ""))
-check(
-  vim.bo[session.bufnr].modifiable and not vim.bo[session.bufnr].modified,
-  "successful :w keeps the context session open and clean"
-)
-
-assert(nveditor.update_context_session_field(
-  session.session_id,
-  "tint",
-  "[0.700,0.600,0.500,1.000]"
-))
-vim.cmd("wq")
-check(vim.api.nvim_get_current_tabpage() == origin_tab, ":wq returns to the source tab")
-local write_close_event = context_events[#context_events]
-check(
-  write_close_event ~= nil
-    and write_close_event.method == "nveditor.context_session_closed"
-    and write_close_event.payload.write_pending,
-  ":wq closes only after dispatching a write"
-)
-vim.api.nvim_del_autocmd(context_event_autocmd)
 
 vim.api.nvim_buf_delete(buffer, { force = true })
 

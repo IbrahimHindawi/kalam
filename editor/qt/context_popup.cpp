@@ -2,8 +2,10 @@
 
 #include "qt_value_widgets.h"
 
+#include <QEvent>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
 #include <QPushButton>
@@ -22,9 +24,8 @@ Context_Popup::Context_Popup(
     Q_ASSERT(fields.size() == values.size());
     setObjectName(QStringLiteral("contextPopup"));
     setFrameShape(QFrame::NoFrame);
-    setFocusPolicy(Qt::NoFocus);
+    setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_StyledBackground, true);
-    setAttribute(Qt::WA_ShowWithoutActivating, true);
 
     auto* root_layout = new QVBoxLayout(this);
     root_layout->setContentsMargins(1, 1, 1, 1);
@@ -64,31 +65,38 @@ Context_Popup::Context_Popup(
             fields.at(index),
             values.at(index),
             this);
-        editor->set_keyboard_passive(true);
+        editor->set_keyboard_passive(false);
         editors_.push_back(editor);
         form->addRow(QString::fromUtf8(fields.at(index).name), editor);
         connect(
             editor,
             &Author_Value_Widget::previewRequested,
             this,
-            &Context_Popup::fieldPreviewRequested);
+            [this](
+                Author_Field_Id field_id,
+                const Author_Value_Owned& value)
+            {
+                if (busy_)
+                    return;
+                dirty_ = true;
+                set_validation_error(QString());
+                refresh_statusline();
+                emit fieldPreviewRequested(field_id, value);
+            });
+        editor->installEventFilter(this);
+        const QList<QWidget*> controls = editor->findChildren<QWidget*>();
+        for (QWidget* control : controls)
+            control->installEventFilter(this);
     }
-    root_layout->addLayout(form);
-
-    auto* hint = new QLabel(
-        QStringLiteral("j/k fields  |  h/l components  |  i edit  |  Esc normal"),
-        this);
-    hint->setObjectName(QStringLiteral("kalamContextHint"));
-    hint->setAlignment(Qt::AlignCenter);
-    root_layout->addWidget(hint);
+    root_layout->addLayout(form, 1);
 
     auto* buttons = new QHBoxLayout();
-    buttons->setContentsMargins(9, 5, 9, 9);
+    buttons->setContentsMargins(9, 5, 9, 5);
     buttons->addStretch();
     auto* discard_button = new QPushButton(QStringLiteral("Discard (:q!)"), this);
-    auto* apply_button = new QPushButton(QStringLiteral("Apply (:w)"), this);
+    auto* apply_button = new QPushButton(QStringLiteral("Write (:w)"), this);
     auto* apply_close_button = new QPushButton(
-        QStringLiteral("Apply && Close (:wq)"),
+        QStringLiteral("Write && Close (:wq)"),
         this);
     for (QPushButton* button : {discard_button, apply_button, apply_close_button})
     {
@@ -98,6 +106,13 @@ Context_Popup::Context_Popup(
         buttons->addWidget(button);
     }
     root_layout->addLayout(buttons);
+
+    status_label_ = new QLabel(this);
+    status_label_->setObjectName(QStringLiteral("kalamContextStatusline"));
+    status_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    status_label_->setTextInteractionFlags(Qt::NoTextInteraction);
+    status_label_->setMinimumHeight(24);
+    root_layout->addWidget(status_label_);
 
     connect(close_button, &QPushButton::clicked, this, &Context_Popup::cancelRequested);
     connect(discard_button, &QPushButton::clicked, this, &Context_Popup::cancelRequested);
@@ -113,11 +128,11 @@ Context_Popup::Context_Popup(
         [this]() { emit applyRequested(true); });
 
     set_active_field(editors_.isEmpty() ? -1 : 0);
+    refresh_statusline();
 }
 
 void Context_Popup::project_to(
     QWidget* shell,
-    const Context_Session_State& state,
     const QRect& anchor_rect,
     const QSize& cell_size)
 {
@@ -127,16 +142,15 @@ void Context_Popup::project_to(
         return;
     }
     if (parentWidget() != shell)
-    {
         setParent(shell);
-    }
 
     const int margin = qMax(4, cell_size.width() / 2);
+    const int editor_bottom_reserve = (2 * cell_size.height()) + margin;
     QRect available = shell->rect().adjusted(
         margin,
         margin,
         -margin,
-        -(cell_size.height() + margin));
+        -editor_bottom_reserve);
     if (!available.isValid() || available.isEmpty())
     {
         hide();
@@ -150,7 +164,7 @@ void Context_Popup::project_to(
     const int maximum_width = qMin(520, available.width());
     const int maximum_height = qMin(420, available.height());
     const int minimum_width = qMin(360, maximum_width);
-    const int minimum_height = qMin(160, maximum_height);
+    const int minimum_height = qMin(180, maximum_height);
     const QSize popup_size(
         qBound(minimum_width, hint.width(), maximum_width),
         qBound(minimum_height, hint.height(), maximum_height));
@@ -159,10 +173,8 @@ void Context_Popup::project_to(
     if (!anchor.isValid() || anchor.isEmpty())
     {
         anchor = QRect(
-            static_cast<int>(state.window_column) * cell_size.width(),
-            static_cast<int>(state.window_row) * cell_size.height(),
-            cell_size.width(),
-            cell_size.height());
+            shell->rect().center(),
+            QSize(cell_size.width(), cell_size.height()));
     }
 
     const int gap = qMax(4, cell_size.width());
@@ -176,7 +188,7 @@ void Context_Popup::project_to(
 
     int y = anchor.top();
     if (y + popup_size.height() - 1 > available.bottom())
-        y = anchor.bottom() - popup_size.height() + 1;
+        y = anchor.top() - gap - popup_size.height();
     y = qBound(
         available.top(),
         y,
@@ -187,13 +199,26 @@ void Context_Popup::project_to(
     raise();
 }
 
-void Context_Popup::set_values(const QVector<Author_Value_Owned>& values)
+QVector<Author_Value_Owned> Context_Popup::staged_values() const
+{
+    QVector<Author_Value_Owned> result;
+    result.reserve(editors_.size());
+    for (const Author_Value_Widget* editor : editors_)
+        result.push_back(editor->value());
+    return result;
+}
+
+void Context_Popup::set_values(
+    const QVector<Author_Value_Owned>& values,
+    bool mark_clean)
 {
     const qsizetype count = qMin(editors_.size(), values.size());
     for (qsizetype index = 0; index < count; ++index)
-    {
         editors_.at(index)->set_value(values.at(index));
-    }
+    dirty_ = !mark_clean;
+    set_validation_error(QString());
+    refresh_modal_selection();
+    refresh_statusline();
 }
 
 void Context_Popup::set_active_field(qsizetype field_index)
@@ -201,52 +226,48 @@ void Context_Popup::set_active_field(qsizetype field_index)
     if (editors_.isEmpty())
     {
         active_field_ = -1;
+        active_component_ = 0;
+        refresh_modal_selection();
         return;
     }
     active_field_ = qBound<qsizetype>(0, field_index, editors_.size() - 1);
-    for (qsizetype index = 0; index < editors_.size(); ++index)
-    {
-        Author_Value_Widget* editor = editors_.at(index);
-        editor->setProperty("kalamActiveField", index == active_field_);
-        editor->style()->unpolish(editor);
-        editor->style()->polish(editor);
-        editor->update();
-    }
+    const int count = editors_.at(active_field_)->editable_component_count();
+    active_component_ = count > 0
+        ? qBound(0, active_component_, count - 1)
+        : 0;
+    refresh_modal_selection();
 }
 
-void Context_Popup::set_mode(const QByteArray& mode)
+void Context_Popup::focus_modal()
 {
-    mode_ = mode;
-    QString label = QStringLiteral("NORMAL");
-    if (mode.startsWith('i'))
-        label = QStringLiteral("INSERT");
-    else if (mode.startsWith('R'))
-        label = QStringLiteral("REPLACE");
-    else if (mode.startsWith('v') || mode.startsWith('V') ||
-             (!mode.isEmpty() && mode.at(0) == char(0x16)))
-        label = QStringLiteral("VISUAL");
-    else if (mode.startsWith('c'))
-        label = QStringLiteral("COMMAND");
-    mode_label_->setText(label);
-    refresh_projected_cursor();
+    enter_mode(QByteArrayLiteral("n"));
 }
 
-void Context_Popup::set_buffer_cursor(
-    const QByteArray& text_utf8,
-    qint64 row,
-    qint64 byte_column)
+QByteArray Context_Popup::mode() const
 {
-    buffer_text_ = text_utf8;
-    buffer_cursor_row_ = row;
-    buffer_cursor_column_ = byte_column;
-    refresh_projected_cursor();
+    return mode_;
 }
 
-bool Context_Popup::has_projected_cursor() const
+qsizetype Context_Popup::active_field() const
+{
+    return active_field_;
+}
+
+int Context_Popup::active_component() const
+{
+    return active_component_;
+}
+
+bool Context_Popup::is_dirty() const
+{
+    return dirty_;
+}
+
+bool Context_Popup::has_modal_selection() const
 {
     for (const Author_Value_Widget* editor : editors_)
     {
-        if (editor->has_projected_cursor())
+        if (editor->has_modal_selection())
             return true;
     }
     return false;
@@ -257,76 +278,312 @@ bool Context_Popup::has_validation_error() const
     return validation_label_ != nullptr && !validation_label_->text().isEmpty();
 }
 
-void Context_Popup::refresh_projected_cursor()
-{
-    for (Author_Value_Widget* editor : editors_)
-        editor->set_projected_cursor(false, {}, 0, mode_);
-    if (editors_.isEmpty() || buffer_text_.isEmpty())
-        return;
-
-    const QList<QByteArray> lines = buffer_text_.split('\n');
-    if (lines.isEmpty())
-        return;
-    const qsizetype field_index = qBound<qsizetype>(
-        0,
-        static_cast<qsizetype>(qMax<qint64>(0, buffer_cursor_row_ - 1)),
-        editors_.size() - 1);
-    const qsizetype line_index = qBound<qsizetype>(
-        0,
-        field_index + 1,
-        lines.size() - 1);
-    const QByteArray line = lines.at(line_index);
-    qsizetype value_start = line.indexOf(':');
-    if (value_start >= 0)
-    {
-        ++value_start;
-        while (value_start < line.size() &&
-               (line.at(value_start) == ' ' || line.at(value_start) == '\t'))
-        {
-            ++value_start;
-        }
-    }
-    else
-    {
-        value_start = 0;
-    }
-
-    qsizetype value_end = line.size();
-    while (value_end > value_start &&
-           (line.at(value_end - 1) == ' ' || line.at(value_end - 1) == '\t'))
-    {
-        --value_end;
-    }
-    if (value_end > value_start && line.at(value_end - 1) == ',')
-    {
-        --value_end;
-        while (value_end > value_start &&
-               (line.at(value_end - 1) == ' ' || line.at(value_end - 1) == '\t'))
-        {
-            --value_end;
-        }
-    }
-
-    active_field_ = field_index;
-    for (qsizetype index = 0; index < editors_.size(); ++index)
-    {
-        Author_Value_Widget* editor = editors_.at(index);
-        editor->setProperty("kalamActiveField", index == active_field_);
-        editor->style()->unpolish(editor);
-        editor->style()->polish(editor);
-        editor->update();
-    }
-    editors_.at(field_index)->set_projected_cursor(
-        true,
-        line.mid(value_start, value_end - value_start),
-        buffer_cursor_column_ - value_start,
-        mode_);
-}
-
 void Context_Popup::set_validation_error(const QString& error)
 {
     validation_label_->setText(error);
     validation_label_->setVisible(!error.isEmpty());
+}
+
+void Context_Popup::set_busy(bool busy)
+{
+    busy_ = busy;
+    for (Author_Value_Widget* editor : editors_)
+        editor->setEnabled(!busy);
+    const QList<QPushButton*> buttons = findChildren<QPushButton*>();
+    for (QPushButton* button : buttons)
+        button->setEnabled(!busy);
+    if (busy_)
+        setFocus(Qt::OtherFocusReason);
+    refresh_modal_selection();
+    refresh_statusline();
+}
+
+bool Context_Popup::eventFilter(QObject* watched, QEvent* event)
+{
+    qsizetype field_index = -1;
+    int component = -1;
+    const bool from_control =
+        locate_control(watched, &field_index, &component);
+
+    if (from_control &&
+        (event->type() == QEvent::MouseButtonPress ||
+         event->type() == QEvent::FocusIn))
+    {
+        active_field_ = field_index;
+        active_component_ = component;
+        if (event->type() == QEvent::MouseButtonPress &&
+            mode_ != QByteArrayLiteral("i"))
+        {
+            enter_mode(QByteArrayLiteral("i"));
+        }
+        else
+        {
+            refresh_modal_selection();
+        }
+    }
+
+    if (event->type() == QEvent::KeyPress)
+    {
+        auto* key_event = static_cast<QKeyEvent*>(event);
+        if (handle_key(key_event, from_control))
+            return true;
+    }
+    return QFrame::eventFilter(watched, event);
+}
+
+void Context_Popup::keyPressEvent(QKeyEvent* event)
+{
+    if (!handle_key(event, false))
+        QFrame::keyPressEvent(event);
+}
+
+bool Context_Popup::handle_key(QKeyEvent* event, bool from_control)
+{
+    if (event == nullptr)
+        return false;
+
+    const int key = event->key();
+    const Qt::KeyboardModifiers modifiers = event->modifiers();
+    const bool control_left_bracket =
+        key == Qt::Key_BracketLeft &&
+        modifiers.testFlag(Qt::ControlModifier);
+
+    if (busy_)
+    {
+        event->accept();
+        return true;
+    }
+
+    if (mode_ == QByteArrayLiteral("i"))
+    {
+        if (key == Qt::Key_Escape || control_left_bracket)
+        {
+            enter_mode(QByteArrayLiteral("n"));
+            event->accept();
+            return true;
+        }
+        return !from_control;
+    }
+
+    if (mode_ == QByteArrayLiteral("c"))
+    {
+        if (key == Qt::Key_Escape || control_left_bracket)
+        {
+            enter_mode(QByteArrayLiteral("n"));
+        }
+        else if (key == Qt::Key_Backspace)
+        {
+            if (command_text_.isEmpty())
+                enter_mode(QByteArrayLiteral("n"));
+            else
+                command_text_.chop(1);
+        }
+        else if (key == Qt::Key_Return || key == Qt::Key_Enter)
+        {
+            execute_command();
+        }
+        else if (!event->text().isEmpty() &&
+                 !modifiers.testFlag(Qt::ControlModifier) &&
+                 !modifiers.testFlag(Qt::AltModifier) &&
+                 !modifiers.testFlag(Qt::MetaModifier))
+        {
+            command_text_.append(event->text());
+        }
+        refresh_statusline();
+        event->accept();
+        return true;
+    }
+
+    if (key == Qt::Key_I)
+    {
+        enter_mode(QByteArrayLiteral("i"));
+    }
+    else if (key == Qt::Key_J || key == Qt::Key_Down ||
+             key == Qt::Key_Tab)
+    {
+        move_field(1);
+    }
+    else if (key == Qt::Key_K || key == Qt::Key_Up ||
+             key == Qt::Key_Backtab)
+    {
+        move_field(-1);
+    }
+    else if (key == Qt::Key_H || key == Qt::Key_Left)
+    {
+        move_component(-1);
+    }
+    else if (key == Qt::Key_L || key == Qt::Key_Right)
+    {
+        move_component(1);
+    }
+    else if (key == Qt::Key_Return || key == Qt::Key_Enter)
+    {
+        enter_mode(QByteArrayLiteral("i"));
+    }
+    else if (key == Qt::Key_Colon ||
+             event->text() == QStringLiteral(":"))
+    {
+        enter_mode(QByteArrayLiteral("c"));
+    }
+    event->accept();
+    return true;
+}
+
+void Context_Popup::enter_mode(const QByteArray& mode)
+{
+    mode_ = mode;
+    if (mode_ != QByteArrayLiteral("c"))
+        command_text_.clear();
+
+    if (mode_ == QByteArrayLiteral("i") &&
+        active_field_ >= 0 &&
+        active_field_ < editors_.size())
+    {
+        editors_.at(active_field_)->focus_component(active_component_);
+    }
+    else
+    {
+        setFocus(Qt::ShortcutFocusReason);
+    }
+    refresh_modal_selection();
+    refresh_statusline();
+}
+
+void Context_Popup::execute_command()
+{
+    const QString command = command_text_.trimmed();
+    command_text_.clear();
+
+    if (command == QStringLiteral("w"))
+    {
+        enter_mode(QByteArrayLiteral("n"));
+        emit applyRequested(false);
+        return;
+    }
+    if (command == QStringLiteral("wq") ||
+        command == QStringLiteral("x"))
+    {
+        enter_mode(QByteArrayLiteral("n"));
+        emit applyRequested(true);
+        return;
+    }
+    if (command == QStringLiteral("q!"))
+    {
+        enter_mode(QByteArrayLiteral("n"));
+        emit cancelRequested();
+        return;
+    }
+    if (command == QStringLiteral("q"))
+    {
+        if (dirty_)
+        {
+            set_validation_error(QStringLiteral(
+                "No write since last change (use :q! to discard)"));
+            enter_mode(QByteArrayLiteral("n"));
+            return;
+        }
+        enter_mode(QByteArrayLiteral("n"));
+        emit cancelRequested();
+        return;
+    }
+
+    set_validation_error(
+        command.isEmpty()
+            ? QStringLiteral("Not an editor command")
+            : QStringLiteral("Not an editor command: %1").arg(command));
+    enter_mode(QByteArrayLiteral("n"));
+}
+
+void Context_Popup::move_field(int direction)
+{
+    if (editors_.isEmpty())
+        return;
+    set_active_field(qBound<qsizetype>(
+        0,
+        active_field_ + direction,
+        editors_.size() - 1));
+}
+
+void Context_Popup::move_component(int direction)
+{
+    if (active_field_ < 0 || active_field_ >= editors_.size())
+        return;
+    const int count = editors_.at(active_field_)->editable_component_count();
+    if (count <= 0)
+        return;
+    active_component_ = qBound(0, active_component_ + direction, count - 1);
+    refresh_modal_selection();
+}
+
+void Context_Popup::refresh_modal_selection()
+{
+    for (qsizetype index = 0; index < editors_.size(); ++index)
+    {
+        Author_Value_Widget* editor = editors_.at(index);
+        const bool active = index == active_field_;
+        editor->setProperty("kalamActiveField", active);
+        editor->set_modal_selection(
+            active,
+            active_component_,
+            mode_ == QByteArrayLiteral("i"));
+        editor->style()->unpolish(editor);
+        editor->style()->polish(editor);
+        editor->update();
+    }
+
+    QString label = QStringLiteral("NORMAL");
+    if (mode_ == QByteArrayLiteral("i"))
+        label = QStringLiteral("INSERT");
+    else if (mode_ == QByteArrayLiteral("c"))
+        label = QStringLiteral("COMMAND");
+    if (mode_label_ != nullptr)
+        mode_label_->setText(label);
+}
+
+void Context_Popup::refresh_statusline()
+{
+    if (status_label_ == nullptr)
+        return;
+
+    if (busy_)
+    {
+        status_label_->setText(QStringLiteral(" WRITING..."));
+        return;
+    }
+    if (mode_ == QByteArrayLiteral("c"))
+    {
+        status_label_->setText(QStringLiteral(" :%1").arg(command_text_));
+        return;
+    }
+    if (mode_ == QByteArrayLiteral("i"))
+    {
+        status_label_->setText(QStringLiteral(
+            " INSERT  Esc normal | Qt staging only until :w"));
+        return;
+    }
+
+    status_label_->setText(QStringLiteral(
+        " NORMAL%1  j/k fields | h/l components | i edit | :w | :wq | :q!")
+        .arg(dirty_ ? QStringLiteral(" [+]") : QString()));
+}
+
+bool Context_Popup::locate_control(
+    const QObject* object,
+    qsizetype* field_index,
+    int* component) const
+{
+    for (qsizetype index = 0; index < editors_.size(); ++index)
+    {
+        const int found = editors_.at(index)->component_for_descendant(object);
+        if (found < 0)
+            continue;
+        if (field_index != nullptr)
+            *field_index = index;
+        if (component != nullptr)
+            *component = found;
+        return true;
+    }
+    return false;
 }
 
 } // namespace Kalam::Editor

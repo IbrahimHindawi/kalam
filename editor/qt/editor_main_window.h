@@ -73,20 +73,24 @@ private:
     Engine_Viewport_Widget* viewport_ = nullptr;
     QPointer<Context_Popup> context_popup_;
     QPointer<Generated_Form> generated_form_;
-    Context_Session_State context_session_state_;
     QVector<Field_Descriptor> context_fields_;
     Source_Context context_source_;
-    qint64 context_session_id_ = 0;
-    quint64 context_preview_changedtick_ = 0;
     quint64 context_rearm_request_id_ = 0;
-    bool context_session_open_ = false;
+    bool context_popup_open_ = false;
     bool context_write_pending_ = false;
+    bool context_close_after_write_ = false;
     bool context_rearming_ = false;
     bool context_rearm_failed_write_ = false;
     QString context_write_error_;
     QRect context_anchor_rect_;
-    bool context_preview_editing_ = false;
     Cursor_Geometry cursor_geometry_;
+    bool generated_form_write_pending_ = false;
+    bool generated_form_close_after_write_ = false;
+    bool generated_form_transaction_accepted_ = false;
+    bool generated_form_document_refreshed_ = false;
+    Author_Field_Id generated_form_write_field_ = 0;
+    quint64 generated_form_write_base_tick_ = 0;
+    QString generated_form_write_error_;
     quint64 selection_context_request_id_ = 0;
     Document_Handle selection_document_;
     Document_Handle initial_document_;
@@ -101,8 +105,7 @@ private:
     quint64 smoke_frame_floor_ = 0;
     quint64 smoke_context_request_id_ = 0;
     int smoke_context_phase_ = 0;
-    qint64 smoke_context_initial_row_ = 0;
-    quint64 smoke_context_edit_changedtick_ = 0;
+    qsizetype smoke_context_initial_field_ = 0;
     bool close_authorized_ = false;
     bool shutting_down_ = false;
 
@@ -111,9 +114,6 @@ private:
         const QVector<Field_Descriptor>& fields,
         const QVector<Author_Value_Owned>& values,
         const Source_Context& context);
-    void handle_context_session_changed(const Context_Session_State& state);
-    void handle_context_session_write(const Context_Session_State& state);
-    void handle_context_session_closed(qint64 session_id, bool write_pending);
     void handle_context_rearm(
         quint64 request_id,
         bool succeeded,
@@ -121,9 +121,15 @@ private:
         const QString& error);
     void begin_context_rearm(bool failed_write);
     void project_context_popup();
-    void clear_context_session();
+    void clear_context_popup();
     void open_generated_form(const Buffer_Snapshot& snapshot);
-    void refresh_generated_form();
+    void refresh_generated_form(Author_Field_Id committed_field = 0);
+    void begin_generated_form_write(bool close_after_write);
+    void continue_generated_form_write();
+    void maybe_finish_generated_form_write_step();
+    void fail_generated_form_write(const QString& error);
+    void reset_generated_form_write();
+    void cancel_generated_form();
     QVector<Author_Value_Owned> read_form_values(
         const Document_Handle& document,
         const Schema_Descriptor& schema,

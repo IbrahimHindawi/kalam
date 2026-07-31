@@ -599,9 +599,12 @@ QColorDialog#authorColorDialog QLineEdit:focus,
 QColorDialog#authorColorDialog QAbstractSpinBox:focus {
     border: 2px solid %10;
 }
-QFrame#contextPopup QLineEdit[kalamProjectedCursor="true"],
-QFrame#contextPopup QAbstractSpinBox[kalamProjectedCursor="true"],
-QFrame#contextPopup QCheckBox[kalamProjectedCursor="true"] {
+QFrame#contextPopup QLineEdit[kalamModalSelection="true"],
+QFrame#contextPopup QAbstractSpinBox[kalamModalSelection="true"],
+QFrame#contextPopup QCheckBox[kalamModalSelection="true"],
+QDialog#generatedAuthorForm QLineEdit[kalamModalSelection="true"],
+QDialog#generatedAuthorForm QAbstractSpinBox[kalamModalSelection="true"],
+QDialog#generatedAuthorForm QCheckBox[kalamModalSelection="true"] {
     border: 2px solid %10;
     background-color: %6;
     color: %7;
@@ -638,31 +641,41 @@ QDialog#generatedAuthorForm QScrollBar {
     color: %4;
     border: none;
 }
-QFrame#contextPopup QWidget#authorValueWidget {
+QFrame#contextPopup QWidget#authorValueWidget,
+QDialog#generatedAuthorForm QWidget#authorValueWidget {
     border-left: 3px solid transparent;
     padding-left: 6px;
 }
-QFrame#contextPopup QWidget#authorValueWidget[kalamActiveField="true"] {
+QFrame#contextPopup QWidget#authorValueWidget[kalamActiveField="true"],
+QDialog#generatedAuthorForm QWidget#authorValueWidget[kalamActiveField="true"] {
     background-color: %8;
     color: %9;
     border-left: 3px solid %10;
 }
-QFrame#contextPopup QLabel#kalamSurfaceMode {
+QFrame#contextPopup QLabel#kalamSurfaceMode,
+QDialog#generatedAuthorForm QLabel#kalamSurfaceMode {
     background-color: %10;
     color: %9;
     padding: 4px 8px;
+}
+QFrame#contextPopup QLabel#kalamContextStatusline,
+QDialog#generatedAuthorForm QLabel#kalamContextStatusline {
+    background-color: %11;
+    color: %12;
+    border-top: 1px solid %5;
+    padding: 4px 8px;
+}
+QFrame#contextPopup:active QLabel#kalamContextStatusline,
+QDialog#generatedAuthorForm:active QLabel#kalamContextStatusline {
+    background-color: %10;
+    color: %9;
 }
 QFrame#contextPopup QLabel#kalamContextHint {
     color: %4;
     padding: 4px;
 }
-QFrame#contextPopup QLabel#kalamProjectedCursor {
-    background-color: %6;
-    color: %7;
-    border: none;
-    padding: 0px 3px;
-}
-QFrame#contextPopup QLabel#kalamContextValidation {
+QFrame#contextPopup QLabel#kalamContextValidation,
+QDialog#generatedAuthorForm QLabel#kalamContextValidation {
     background-color: %3;
     color: %4;
     border-left: 3px solid %5;

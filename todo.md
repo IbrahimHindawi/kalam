@@ -1,57 +1,41 @@
-# Kalam Neovim-Native Qt Interaction Model
+# Kalam Qt-Owned Context Interaction Model
 
 Status: implemented
 
-This document defines the next interaction model for the Qt-hosted Kalam
-editor. It supersedes the fixed-key invocation details in `docs/spec_1.md`,
-including the default F4, Shift-F4, and F6 mappings. The existing validation,
-preview, commit, cancellation, and Neovim undo guarantees remain in force.
+This document defines the interaction model for contextual Qt authoring inside
+the Qt-hosted Kalam editor. It supersedes the earlier hidden-Neovim-staging
+design and the fixed-key invocation details in `docs/spec_1.md`.
 
 ## 1. Product model
 
 Kalam is a Qt-hosted Neovim editor with native graphical tools.
 
-Neovim is not a text widget embedded inside a conventional GUI editor. It is
-the editing and command authority. Qt is the presentation and graphical-tool
-layer around it.
-
-The primary product is the integrated Qt application:
-
-- Neovim supplies modes, mappings, commands, buffers, plugins, terminal
-  buffers, registers, macros, undo, and authored text.
-- Qt supplies the Neovim frontend, application layout, contextual controls,
-  generated forms, graphs, visual editors, and game viewport.
-- The engine consumes only validated authored state and supplies previews and
+- Neovim owns ordinary text editing, commands, source buffers, undo, plugins,
+  terminal buffers, and the canonical authored JSON.
+- Qt owns graphical tools, including contextual controls, forms, graphs,
+  visual editors, and the game viewport.
+- The engine consumes validated authored state and supplies previews and
   runtime rendering.
 
-Developing a separate Kalam TUI frontend, porting Qt tools to terminal
-presentations, and maintaining GUI/TUI feature parity are out of scope for
-this phase.
+A separate Kalam TUI frontend, terminal ports of Qt tools, and GUI/TUI feature
+parity are out of scope for this phase.
 
 ## 2. Interaction principles
 
-1. **Command first.** Every meaningful Kalam operation has a named Neovim
-   command. A fixed keyboard shortcut is never the only way to invoke it.
-2. **One action, multiple affordances.** A Neovim command, user mapping, Qt
-   button, menu item, and mouse gesture must dispatch the same underlying
-   action rather than maintaining separate behavior.
-3. **Keyboard complete.** Every authored workflow must be usable without a
-   mouse. The mouse remains supported but is never required.
-4. **Neovim owns authored state.** Qt never saves or independently rewrites a
-   scene document. Accepted GUI changes are applied through the Neovim buffer
-   and participate in normal Neovim undo.
-5. **Qt follows Neovim visually.** The active Neovim colorscheme and frontend
-   font drive the appearance of editor-adjacent Qt surfaces.
-6. **Focus is explicit.** Keyboard input belongs to exactly one surface at a
-   time, the focused surface is visibly identifiable, and returning to
-   Neovim is always predictable.
-7. **Transient by default.** Contextual tools appear when requested and
-   disappear after accept or cancel. Permanent GUI chrome is added only when
-   a workflow genuinely requires it.
+1. Every meaningful Kalam operation has a named Neovim `:Kalam` command.
+2. Every authored workflow is keyboard-complete; mouse access is optional.
+3. Keyboard input belongs to exactly one focused surface at a time.
+4. Opening a contextual GUI transfers keyboard ownership from Neovim to that
+   Qt popup until the popup commits, closes, or is cancelled.
+5. The popup owns its temporary values and modal state. It never edits a
+   hidden or visible Neovim staging buffer.
+6. The source Neovim buffer remains byte-for-byte unchanged during preview.
+   Only an explicit commit may make one surgical Neovim buffer edit.
+7. Qt styling follows the active Neovim colorscheme and frontend font.
 
-## 3. Canonical Neovim command surface
+## 3. Command surface
 
-Kalam exposes one discoverable command namespace:
+The canonical commands are:
 
 ```vim
 :Kalam edit context
@@ -64,109 +48,106 @@ Kalam exposes one discoverable command namespace:
 :Kalam stop
 ```
 
-The exact set may grow, but it must obey these rules:
+Kalam claims no F-key or leader mapping by default. Public actions expose
+`<Plug>` mappings so users can choose their own bindings. Compatibility
+aliases may remain temporarily.
 
-- `:Kalam` with no arguments lists available operations and short
-  descriptions.
-- Arguments have Neovim command-line completion.
-- Invalid or unavailable operations produce a concise Neovim notification.
-- Commands are safe to call from user mappings, Lua configuration, scripts,
-  and Qt actions.
-- Commands dispatch stable internal action identifiers so invocation source
-  does not alter behavior.
+## 4. Context popup focus and modes
 
-The existing commands `:NvEditContext`, `:NvEditForm`, and `:NvBuildReload`
-may remain temporarily as compatibility aliases. New documentation and tests
-use the `:Kalam` namespace.
+Invoking `:Kalam edit context` captures the source buffer, changedtick, JSON
+path, cursor position, and rendered cursor rectangle. It then opens a Qt popup
+and gives that popup keyboard focus.
 
-### 3.1 Mappings
+While the popup is open:
 
-Kalam does not claim F4, Shift-F4, F6, a leader sequence, or another global
-user key by default.
+- popup keystrokes are consumed by Qt and are not forwarded to Neovim;
+- the source Neovim buffer is not used as a staging surface;
+- the selected graphical control is always visibly identifiable;
+- closing or cancelling returns focus to Neovim.
 
-The plugin exposes documented `<Plug>` mappings for its public actions. Users
-may bind those mappings to F-keys, leader sequences, chords, or no keys at
-all. Any optional convenience mappings must be explicitly enabled by
-configuration and must remain remappable.
+The popup provides a deliberately small Vim-like modal layer. It is not a
+second Neovim instance and does not claim complete Neovim emulation.
 
-Removing the default mapping does not remove keyboard access: command-line
-invocation and user-configured mappings are first-class interaction paths.
+### 4.1 Normal mode
 
-## 4. Focus and keyboard contract
+The popup opens in Normal mode.
 
-### 4.1 Neovim focus
+- `j` / `k` move between fields;
+- `h` / `l` move between components of a compound field;
+- arrow keys provide equivalent movement;
+- `i` or `Enter` enters Insert mode on the selected Qt control;
+- `:` opens the popup-owned command line;
+- unhandled keys remain in the popup and never alter the Neovim buffer.
 
-Neovim owns keyboard input during ordinary editing. Qt surfaces must not
-consume editing keys, application-wide shortcuts, or mouse-wheel events when
-they are not focused.
+### 4.2 Insert mode
 
-Invoking a Kalam command captures the current Neovim window, buffer, cursor
-position, and rendered cursor rectangle before opening a contextual surface.
+Insert mode gives focus to the selected real Qt editor: line edit, spin box,
+checkbox, or another typed control.
 
-### 4.2 Neovim-owned context sessions
+- Typed input is handled by that Qt control.
+- Pressing `i` again is ordinary field input; it cannot leak to Neovim.
+- `Escape` or `Ctrl-[` returns focus to popup Normal mode.
+- Value changes update popup-owned staging and may preview through the engine.
+- Preview does not edit the source Neovim buffer.
 
-Opening a contextual editor creates a real temporary Neovim buffer and window.
-That staging buffer, not Qt, owns keyboard focus and editing state:
+Qt controls retain appropriate native editing behavior. Implementing every
+Neovim text motion, register, mapping, macro, and operator inside individual
+Qt fields is a non-goal.
 
-- Normal, Insert, command-line, undo, redo, registers, mappings, and motions
-  are native Neovim behavior;
-- `j` and `k` move between one-field-per-line staging rows, while `h` and `l`
-  move within the staged JSON text;
-- `i`, `a`, and the user's normal mappings enter or manipulate Insert mode;
-- `Escape` and `Ctrl-[` return to Normal mode and do not cancel the session;
-- the context window has a real Neovim statusline and command line;
-- `:w` validates and applies the staged values, then keeps the session open;
-- `:wq` applies and closes; `:q` closes only when clean; `:q!` discards;
-- closing returns to the originating Neovim window and buffer.
+### 4.3 Command mode and bottom statusline
 
-The Qt surface is a keyboard-passive graphical projection of this buffer. It
-shows typed controls, accepts mouse manipulation, and mirrors Neovim's mode,
-cursor, and active field. Mouse changes write through to the same staging
-buffer so Neovim undo and modified-buffer rules remain authoritative. No
-keystroke is independently interpreted by both Neovim and Qt.
+The popup owns its command line and displays it in a statusline that is always
+the bottom-most row of the popup.
 
-### 4.3 Persistent viewport and game focus
+- `:w` validates and commits the staged values, then keeps the popup open;
+- `:wq` commits and closes;
+- `:x` commits and closes;
+- `:q` closes only when the popup is clean;
+- `:q!` discards staged values and closes;
+- `Escape` leaves Command or Insert mode without cancelling the popup.
 
-The viewport is visible independently of keyboard ownership.
+The statusline reports Normal, Insert, Command, dirty, validation, and
+write-pending state without relying on a Neovim window beneath the popup.
 
-- While Neovim is focused, ordinary keys continue to operate Neovim.
-- `:Kalam focus viewport` transfers input to viewport navigation.
-- `Escape` leaves viewport navigation and returns focus to Neovim.
-- The viewport captures camera or game input only while explicitly focused or
-  in an explicit play-capture state.
-- Play capture must always have a visible, configurable escape path.
-- `:Kalam focus editor` restores Neovim focus from any non-modal Kalam
-  surface.
+## 5. Placement and presentation
 
-The editor must never require clicking the viewport merely to make a
-document-level command available.
+A contextual popup is a compact child surface inside the Kalam window.
 
-## 5. Contextual and generated Qt surfaces
+- It is anchored beside the captured Neovim cursor when space permits.
+- If the cursor is low, the entire popup is placed above the cursor instead of
+  being clamped against the absolute bottom of the editor.
+- It stays within the usable editor area.
+- Its default bounds do not exceed 520 by 420 logical pixels.
+- At least two Neovim text rows are reserved below it so the editor status and
+  command area are not obscured.
+- Its own statusline remains pinned to the popup bottom.
+- It uses Neovim-derived float, border, selection, status, diagnostic, and font
+  styling.
 
-Contextual editors occupy the text-grid area of their temporary Neovim window
-inside the Qt-hosted application. The Qt body is projected over that grid,
-while the real Neovim statusline and command-line area remain visible.
+Generated forms, graphs, and visual editors may use larger surfaces, but they
+follow the same explicit focus, transaction, theme, and dismissal rules.
 
-They must:
+## 6. Authoring and undo contract
 
-- preserve enough text-grid space for the Neovim statusline and command line;
-- remain within the usable Kalam window or screen area;
-- use a Neovim-style border, title, and focus treatment;
-- track their staging window geometry, cursor, mode, and active field;
-- leave keyboard operation to the underlying Neovim context buffer;
-- preserve the existing preview, accept, cancel, and changedtick checks.
+1. Neovim validates the source document and resolves cursor context.
+2. Qt creates typed controls initialized from the validated runtime document.
+3. Keyboard and mouse edits change only Qt-owned staged values.
+4. Valid staged values preview through the runtime without changing source
+   text or changedtick.
+5. `:w` or `:wq` requests one surgical patch through the Neovim adapter.
+6. A commit is rejected if the captured buffer, changedtick, JSON path, or
+   byte range is stale.
+7. One accepted commit creates one logical Neovim source-buffer undo step.
+8. Cancel restores the original runtime values and performs no source edit.
+9. A failed write keeps the popup open and preserves staged values when the
+   context can be safely refreshed.
 
-Generated full-document forms, graphs, and visual editors may use a larger
-overlay, temporary tab, or temporary split. They follow the same command,
-focus, theme, transaction, and dismissal rules as small contextual editors.
+Qt does not save the file or independently rewrite JSON. Neovim remains the
+canonical source and undo authority even though Qt owns popup interaction.
 
-Native operating-system dialogs are exceptions only where Qt cannot
-reasonably provide an integrated surface.
+## 7. Theme bridge
 
-## 6. Theme bridge
-
-Neovim is the source of truth for editor-adjacent Qt styling. Qt resolves and
-maps at least the following highlight roles:
+Qt maps editor-adjacent styling from these Neovim highlight roles:
 
 | Qt role | Preferred Neovim highlight |
 | --- | --- |
@@ -179,102 +160,38 @@ maps at least the following highlight roles:
 | Inactive header or status | `StatusLineNC` |
 | Error, warning, information, hint | matching `Diagnostic*` groups |
 
-Requirements:
-
-- linked highlight groups are resolved before applying the Qt palette;
-- unset or transparent colors use documented fallbacks;
-- a `:colorscheme` change updates visible Qt surfaces without restarting
-  Kalam;
-- changes to Neovim background and UI font settings trigger the same refresh;
-- textual Qt chrome uses the Neovim frontend font and compatible metrics where
-  practical;
-- native Windows widget styling must not visibly override the Kalam palette;
-- active and inactive panes remain distinguishable in low-contrast themes.
-
-The game framebuffer itself is not recolored to match Neovim. The viewport
-chrome, empty background, overlays, graphs, diagnostics, and editor gizmos may
-use the shared palette.
-
-The goal is for Qt surfaces to look like graphical extensions of the active
-Neovim theme, not to force every graphical control into a character-cell
-imitation.
-
-## 7. Authoring and undo contract
-
-The existing transaction model remains authoritative:
-
-1. Neovim validates the active document and resolves cursor context.
-2. Neovim creates a temporary staging buffer with one typed field per line.
-3. Keyboard edits act directly on that buffer; Qt mouse changes write through
-   to it and therefore participate in its native undo history.
-4. Valid staged values preview through the runtime without editing or saving
-   the source document.
-5. `:w` or `:wq` applies one surgical source-buffer change through Neovim.
-6. One accepted write creates one logical source-buffer undo step.
-7. `:q!` or another cancel path restores runtime state and makes no source
-   text edit.
-8. A changedtick or context mismatch blocks a stale commit and reports the
-   conflict without overwriting newer text.
-
-Mouse manipulation, keyboard manipulation, viewport gizmos, contextual
-controls, and generated forms all use this same transaction contract.
+Colorscheme, background, and UI-font changes update visible Qt surfaces.
+Native widget styling must not override the Kalam palette.
 
 ## 8. Non-goals
 
-This interaction revision does not require:
+This phase does not require:
 
-- pixel-identical reproduction of every Neovim or terminal cell;
-- a separate Kalam TUI frontend;
-- terminal versions or fallbacks for Qt graphical tools;
-- GUI/TUI feature parity;
+- a separate Kalam TUI frontend or terminal fallbacks for Qt tools;
+- a hidden Neovim context staging buffer;
+- forwarding the same key to both Neovim and Qt;
+- embedding a full Neovim engine inside every Qt field;
+- complete Vim operators, registers, macros, mappings, or text objects inside
+  native Qt controls;
 - an external Qt window positioned over a separate terminal;
 - permanent inspector, asset-browser, or console docks;
-- Qt becoming an independent JSON editor;
-- hardcoded cube-specific shortcuts;
-- removing mouse support.
+- Qt directly saving or independently rewriting authored JSON.
 
 ## 9. Acceptance criteria
 
-- [x] Starting Kalam places keyboard focus in Neovim.
-- [x] Ordinary Neovim modes, mappings, plugins, splits, and terminal buffers
-      continue to work without Qt shortcut interference.
-- [x] `:Kalam` exposes and completes the supported action namespace.
-- [x] Context edit, generated form, build/reload, and focus operations work
-      without default F-key mappings.
-- [x] F4, Shift-F4, and F6 are unclaimed unless the user explicitly maps or
-      enables them.
-- [x] Every shipped Qt authoring surface can be opened, operated, accepted,
-      cancelled, and dismissed using only the keyboard.
-- [x] `Escape` returns a context buffer from Insert to Normal mode; explicit
-      viewport capture still returns to Neovim without modifying the buffer.
-- [x] Context editing uses a real Neovim staging buffer with native motions,
-      modes, command line, modified-buffer protection, and undo/redo.
-- [x] Context `:w`, `:wq`, `:q`, and `:q!` have native Neovim-style semantics.
-- [x] The Qt context body is keyboard-passive and leaves the real Neovim
-      statusline and command-line area visible.
-- [x] The currently focused Neovim or Qt surface is visually unambiguous.
-- [x] Mouse and keyboard invocation of the same operation produce identical
-      authored transactions.
-- [x] Accept creates one logical Neovim undo step; cancel creates none.
-- [x] Qt never writes an authored JSON document directly.
-- [x] Changing the Neovim colorscheme updates open Qt surfaces immediately.
-- [x] Qt chrome remains legible with both light and dark Neovim themes.
-- [x] The viewport receives navigation or game input only while explicitly
-      focused or captured.
-- [x] Closing a transient surface restores the originating Neovim window,
-      buffer, and cursor context.
-
-## 10. Implementation order
-
-- [x] Introduce the shared Kalam action registry and `:Kalam` dispatcher.
-- [x] Expose `<Plug>` mappings and remove fixed default F-key mappings.
-- [x] Define and test editor, transient-surface, viewport, and play-capture
-      focus transitions.
-- [x] Make existing contextual and generated controls keyboard complete.
-- [x] Add the Neovim-highlight-to-Qt theme bridge with live updates.
-- [x] Apply Neovim-style chrome and focus indicators to transient surfaces.
-- [x] Replace Qt-emulated context editing with a real Neovim staging buffer
-      and a keyboard-passive Qt projection.
-- [x] Route viewport and remaining Qt actions through the shared action model.
-- [x] Update `docs/spec_1.md`, runtime tests, Qt tests, and user documentation
-      after this proposal is accepted.
+- [x] `:Kalam edit context` opens a compact popup near the source cursor.
+- [x] A low source cursor places the popup above it rather than at the screen
+      bottom.
+- [x] The popup statusline is its bottom-most row and editor-bottom space stays
+      visible.
+- [x] The popup opens focused in its own Normal mode.
+- [x] `j/k` navigate fields and `h/l` navigate compound components.
+- [x] `i` enters Insert mode on the selected Qt field.
+- [x] Repeated Insert-mode input stays in Qt and cannot edit Neovim.
+- [x] `Escape` returns from the field to popup Normal mode.
+- [x] `:` opens a Qt-owned command line with `:w`, `:wq`, `:x`, `:q`,
+      and `:q!` behavior.
+- [x] Preview changes runtime state without changing the source document.
+- [x] Commit creates one Neovim patch and cancel creates none.
+- [x] Closing the popup returns keyboard focus to Neovim.
+- [x] Qt chrome follows live Neovim theme and font changes.

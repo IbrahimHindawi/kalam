@@ -49,11 +49,6 @@ public:
     static QByteArray format_value_json(
         const Field_Descriptor& field,
         const Author_Value_Owned& value);
-    static bool parse_context_values(
-        const QVector<Field_Descriptor>& fields,
-        const QByteArray& text_utf8,
-        QVector<Author_Value_Owned>* values,
-        QString* error);
 
 signals:
     void contextEditReady(

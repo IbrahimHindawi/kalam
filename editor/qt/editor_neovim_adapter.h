@@ -41,24 +41,6 @@ public:
         const Source_Context& context,
         const QByteArray& replacement_utf8);
 
-    void open_context_session(
-        const QVector<Field_Descriptor>& fields,
-        const QVector<Author_Value_Owned>& values,
-        const Source_Context& context);
-    void update_context_session_field(
-        qint64 session_id,
-        const QByteArray& field_name,
-        const QByteArray& value_json);
-    void finish_context_session_write(
-        qint64 session_id,
-        bool succeeded,
-        const QString& message = QString());
-    void request_context_session_write(
-        qint64 session_id,
-        bool close_after_write);
-    void close_context_session(qint64 session_id, bool force);
-    void send_input(const QByteArray& keys);
-
     void set_quickfix(
         const QVector<Diagnostic>& diagnostics,
         const QString& title,
@@ -95,11 +77,7 @@ signals:
         bool succeeded,
         quint64 resulting_changedtick,
         QString error);
-    void contextSessionChanged(
-        Kalam::Editor::Context_Session_State state);
-    void contextSessionWriteRequested(
-        Kalam::Editor::Context_Session_State state);
-    void contextSessionClosed(qint64 session_id, bool write_pending);
+
 
 private slots:
     void handle_ready();
@@ -126,7 +104,6 @@ private:
 
     static Buffer_Snapshot snapshot_from_map(const QVariantMap& map);
     static Source_Context context_from_map(const QVariantMap& map);
-    static Context_Session_State context_session_from_map(const QVariantMap& map);
     static QString first_diagnostic(const QVariantMap& map);
     static QString vim_single_quote(const QString& value);
 };

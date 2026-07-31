@@ -11,8 +11,11 @@
 
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QKeyEvent>
+#include <QLabel>
 #include <QSplitter>
 #include <QtMath>
 
@@ -134,21 +137,6 @@ void Editor_Main_Window::wire_editor()
         });
     connect(
         neovim_,
-        &Editor_Neovim_Adapter::contextSessionChanged,
-        this,
-        &Editor_Main_Window::handle_context_session_changed);
-    connect(
-        neovim_,
-        &Editor_Neovim_Adapter::contextSessionWriteRequested,
-        this,
-        &Editor_Main_Window::handle_context_session_write);
-    connect(
-        neovim_,
-        &Editor_Neovim_Adapter::contextSessionClosed,
-        this,
-        &Editor_Main_Window::handle_context_session_closed);
-    connect(
-        neovim_,
         &Editor_Neovim_Adapter::formEditRequested,
         this,
         &Editor_Main_Window::open_generated_form);
@@ -207,6 +195,10 @@ void Editor_Main_Window::wire_editor()
             {
                 context_write_error_ = error;
             }
+            if (generated_form_write_pending_)
+            {
+                generated_form_write_error_ = error;
+            }
             neovim_->notify_user(error, true);
         });
     connect(
@@ -215,38 +207,67 @@ void Editor_Main_Window::wire_editor()
         this,
         [this](bool accepted)
         {
-            if (context_session_id_ == 0)
+            if (shutting_down_)
             {
+                clear_context_popup();
                 return;
             }
+
+            if (generated_form_write_pending_)
+            {
+                if (!accepted)
+                {
+                    fail_generated_form_write(
+                        generated_form_write_error_.isEmpty()
+                            ? QStringLiteral("form write failed")
+                            : generated_form_write_error_);
+                    return;
+                }
+
+                generated_form_transaction_accepted_ = true;
+                maybe_finish_generated_form_write_step();
+                return;
+            }
+
+            if (context_popup_ == nullptr || !context_popup_open_)
+                return;
+
             if (context_write_pending_)
             {
-                if (!context_session_open_)
+                const bool close_after_write = context_close_after_write_;
+                if (accepted && close_after_write)
                 {
-                    clear_context_session();
+                    clear_context_popup();
                     neovim_->focus_editor();
                     return;
                 }
+
                 if (accepted)
                 {
                     begin_context_rearm(false);
                 }
                 else
                 {
-                    QTimer::singleShot(0, this, [this]()
-                    {
-                        if (context_session_open_)
-                            begin_context_rearm(true);
-                        else
-                            clear_context_session();
-                    });
+                    QTimer::singleShot(
+                        0,
+                        this,
+                        [this]()
+                        {
+                            if (context_popup_ != nullptr &&
+                                context_popup_open_)
+                            {
+                                begin_context_rearm(true);
+                            }
+                            else
+                            {
+                                clear_context_popup();
+                            }
+                        });
                 }
                 return;
             }
 
-            if (context_session_open_)
-                neovim_->close_context_session(context_session_id_, true);
-            clear_context_session();
+            clear_context_popup();
             neovim_->focus_editor();
         });
 
@@ -272,8 +293,22 @@ void Editor_Main_Window::wire_editor()
                 {
                     initial_document_ = accepted;
                 }
-                transactions_->document_changed(snapshot);
-                refresh_generated_form();
+
+                const bool generated_write_snapshot =
+                    generated_form_write_pending_ &&
+                    generated_form_ != nullptr &&
+                    snapshot.buffer == generated_form_->document().buffer &&
+                    snapshot.changedtick > generated_form_write_base_tick_;
+                if (generated_write_snapshot)
+                {
+                    generated_form_document_refreshed_ = true;
+                    maybe_finish_generated_form_write_step();
+                }
+                else
+                {
+                    transactions_->document_changed(snapshot);
+                    refresh_generated_form();
+                }
             }
             else
             {
@@ -448,60 +483,104 @@ void Editor_Main_Window::open_context_popup(
     const QVector<Author_Value_Owned>& values,
     const Source_Context& context)
 {
-    if (context_rearming_ && context_session_id_ != 0)
+    if (context_rearming_ && context_popup_ != nullptr)
     {
+        const QVector<Author_Value_Owned> staged_values =
+            context_popup_->staged_values();
         context_fields_ = fields;
         context_source_ = context;
-        context_preview_changedtick_ = 0;
-        if (context_popup_ != nullptr)
-        {
-            context_popup_->set_values(values);
-        }
+        context_popup_->set_values(values, true);
+
         const bool failed_write = context_rearm_failed_write_;
-        const QString message = failed_write
+        QString message = failed_write
             ? (context_write_error_.isEmpty()
                 ? QStringLiteral("context write failed; staged edits were preserved")
                 : context_write_error_)
             : QString();
+
+        if (failed_write && staged_values.size() == fields.size())
+        {
+            QString preview_error;
+            bool restored = true;
+            for (qsizetype index = 0; index < fields.size(); ++index)
+            {
+                if (!transactions_->preview_field(
+                        fields.at(index).id,
+                        staged_values.at(index),
+                        &preview_error))
+                {
+                    restored = false;
+                    break;
+                }
+            }
+            if (restored)
+            {
+                context_popup_->set_values(staged_values, false);
+            }
+            else
+            {
+                message += QStringLiteral(
+                    "; the refreshed schema could not restore every staged value");
+                if (!preview_error.isEmpty())
+                    message += QStringLiteral(": ") + preview_error;
+            }
+        }
+
         context_write_pending_ = false;
+        context_close_after_write_ = false;
         context_rearming_ = false;
         context_rearm_failed_write_ = false;
         context_write_error_.clear();
-        neovim_->finish_context_session_write(
-            context_session_id_,
-            !failed_write,
-            message);
-        neovim_->focus_editor();
+        context_popup_->set_busy(false);
+        context_popup_->set_validation_error(message);
+        project_context_popup();
+        context_popup_->focus_modal();
         return;
     }
 
-    clear_context_session();
-    context_anchor_rect_ = shell_->cursor_geometry().cursor_rect;
+    clear_context_popup();
+    const Cursor_Geometry geometry = shell_->cursor_geometry();
+    if (context.screen_row >= 0 &&
+        context.screen_column >= 0 &&
+        geometry.cell_size.width() > 0 &&
+        geometry.cell_size.height() > 0)
+    {
+        context_anchor_rect_ = QRect(
+            static_cast<int>(context.screen_column) *
+                geometry.cell_size.width(),
+            static_cast<int>(context.screen_row) *
+                geometry.cell_size.height(),
+            geometry.cell_size.width(),
+            geometry.cell_size.height());
+    }
+    else
+    {
+        context_anchor_rect_ = geometry.cursor_rect;
+    }
     context_fields_ = fields;
     context_source_ = context;
+    context_popup_open_ = true;
     context_popup_ = new Context_Popup(fields, values, shell_);
     context_popup_->hide();
+
     connect(
         context_popup_,
         &Context_Popup::fieldPreviewRequested,
         this,
         [this](Author_Field_Id field_id, const Author_Value_Owned& value)
         {
-            if (context_session_id_ == 0 || context_write_pending_)
+            if (context_popup_ == nullptr ||
+                context_write_pending_ ||
+                !transactions_->is_active())
             {
                 return;
             }
-            for (const Field_Descriptor& field : context_fields_)
-            {
-                if (field.id != field_id)
-                    continue;
-                neovim_->update_context_session_field(
-                    context_session_id_,
-                    field.name,
-                    Author_Transaction_Controller::format_value_json(field, value));
-                neovim_->focus_editor();
-                return;
-            }
+
+            QString error;
+            if (!transactions_->preview_field(field_id, value, &error))
+                context_popup_->set_validation_error(error);
+            else
+                context_popup_->set_validation_error(QString());
         });
     connect(
         context_popup_,
@@ -509,13 +588,18 @@ void Editor_Main_Window::open_context_popup(
         this,
         [this](bool close_after_write)
         {
-            if (context_session_id_ != 0 && !context_write_pending_)
+            if (context_popup_ == nullptr ||
+                context_write_pending_ ||
+                !transactions_->is_active())
             {
-                neovim_->request_context_session_write(
-                    context_session_id_,
-                    close_after_write);
-                neovim_->focus_editor();
+                return;
             }
+
+            context_close_after_write_ = close_after_write;
+            context_write_pending_ = true;
+            context_write_error_.clear();
+            context_popup_->set_busy(true);
+            transactions_->accept();
         });
     connect(
         context_popup_,
@@ -523,155 +607,26 @@ void Editor_Main_Window::open_context_popup(
         this,
         [this]()
         {
-            if (context_session_id_ != 0)
+            if (context_write_pending_)
+                return;
+            if (transactions_->is_active())
             {
-                neovim_->close_context_session(context_session_id_, true);
-                neovim_->focus_editor();
+                transactions_->cancel();
+                return;
             }
+            clear_context_popup();
+            neovim_->focus_editor();
         });
 
-    neovim_->open_context_session(fields, values, context);
-    neovim_->focus_editor();
-}
-
-void Editor_Main_Window::handle_context_session_changed(
-    const Context_Session_State& state)
-{
-    if (state.session_id <= 0 || context_popup_ == nullptr)
-    {
-        return;
-    }
-    if (context_session_id_ == 0)
-    {
-        context_session_id_ = state.session_id;
-    }
-    if (state.session_id != context_session_id_)
-    {
-        return;
-    }
-
-    context_session_open_ = true;
-    context_session_state_ = state;
-    context_popup_->set_mode(state.mode);
-    context_popup_->set_buffer_cursor(
-        state.text_utf8,
-        state.cursor_row,
-        state.cursor_column);
-    if (!context_fields_.isEmpty())
-    {
-        context_popup_->set_active_field(qBound<qsizetype>(
-            0,
-            static_cast<qsizetype>(state.cursor_row - 1),
-            context_fields_.size() - 1));
-    }
     project_context_popup();
-
-    const bool editing = state.mode.startsWith('i') ||
-        state.mode.startsWith('R');
-    if (context_write_pending_ ||
-        (state.changedtick == context_preview_changedtick_ &&
-         editing == context_preview_editing_))
-    {
-        return;
-    }
-    context_preview_changedtick_ = state.changedtick;
-    context_preview_editing_ = editing;
-
-    QVector<Author_Value_Owned> values;
-    QString error;
-    if (!Author_Transaction_Controller::parse_context_values(
-            context_fields_, state.text_utf8, &values, &error))
-    {
-        context_popup_->set_validation_error(editing ? QString() : error);
-        return;
-    }
-    context_popup_->set_validation_error(QString());
-    context_popup_->set_values(values);
-    if (!transactions_->is_active())
-    {
-        return;
-    }
-    for (qsizetype index = 0; index < context_fields_.size(); ++index)
-    {
-        if (!transactions_->preview_field(
-                context_fields_.at(index).id,
-                values.at(index),
-                &error))
-        {
-            context_popup_->set_validation_error(error);
-            return;
-        }
-    }
-}
-
-void Editor_Main_Window::handle_context_session_write(
-    const Context_Session_State& state)
-{
-    if (state.session_id <= 0 ||
-        (context_session_id_ != 0 && state.session_id != context_session_id_))
-    {
-        return;
-    }
-    if (context_session_id_ == 0)
-        context_session_id_ = state.session_id;
-    context_session_open_ = true;
-    context_session_state_ = state;
-    context_write_pending_ = true;
-    context_write_error_.clear();
-
-    QVector<Author_Value_Owned> values;
-    QString error;
-    if (!Author_Transaction_Controller::parse_context_values(
-            context_fields_, state.text_utf8, &values, &error))
-    {
-        context_write_pending_ = false;
-        if (context_popup_ != nullptr)
-            context_popup_->set_validation_error(error);
-        neovim_->finish_context_session_write(state.session_id, false, error);
-        return;
-    }
-    for (qsizetype index = 0; index < context_fields_.size(); ++index)
-    {
-        if (!transactions_->preview_field(
-                context_fields_.at(index).id,
-                values.at(index),
-                &error))
-        {
-            context_write_pending_ = false;
-            if (context_popup_ != nullptr)
-                context_popup_->set_validation_error(error);
-            neovim_->finish_context_session_write(state.session_id, false, error);
-            return;
-        }
-    }
-    transactions_->accept();
-}
-
-void Editor_Main_Window::handle_context_session_closed(
-    qint64 session_id,
-    bool write_pending)
-{
-    if (session_id <= 0 || session_id != context_session_id_)
-    {
-        return;
-    }
-    context_session_open_ = false;
-    if (context_popup_ != nullptr)
-        context_popup_->hide();
-    if (write_pending || context_write_pending_)
-    {
-        return;
-    }
-    if (transactions_->is_active())
-        transactions_->cancel();
-    else
-        clear_context_session();
-    neovim_->focus_editor();
+    context_popup_->focus_modal();
 }
 
 void Editor_Main_Window::begin_context_rearm(bool failed_write)
 {
-    if (!context_session_open_ || context_rearm_request_id_ != 0)
+    if (context_popup_ == nullptr ||
+        !context_popup_open_ ||
+        context_rearm_request_id_ != 0)
     {
         return;
     }
@@ -689,13 +644,12 @@ void Editor_Main_Window::handle_context_rearm(
     const QString& error)
 {
     if (request_id == 0 || request_id != context_rearm_request_id_)
-    {
         return;
-    }
+
     context_rearm_request_id_ = 0;
-    if (!context_session_open_)
+    if (context_popup_ == nullptr || !context_popup_open_)
     {
-        clear_context_session();
+        clear_context_popup();
         return;
     }
     if (!succeeded)
@@ -703,38 +657,43 @@ void Editor_Main_Window::handle_context_rearm(
         const QString message = error.isEmpty()
             ? QStringLiteral("could not refresh the context after writing")
             : error;
-        neovim_->finish_context_session_write(
-            context_session_id_, false, message);
-        neovim_->close_context_session(context_session_id_, true);
-        clear_context_session();
+        context_write_pending_ = false;
+        context_close_after_write_ = false;
+        context_rearming_ = false;
+        context_rearm_failed_write_ = false;
+        context_write_error_.clear();
+        context_popup_->set_busy(false);
+        context_popup_->set_validation_error(message);
+        context_popup_->focus_modal();
         return;
     }
 
     QString begin_error;
     if (!transactions_->begin_context_edit(context, &begin_error))
     {
-        neovim_->finish_context_session_write(
-            context_session_id_, false, begin_error);
-        neovim_->close_context_session(context_session_id_, true);
-        clear_context_session();
-        return;
+        context_write_pending_ = false;
+        context_close_after_write_ = false;
+        context_rearming_ = false;
+        context_rearm_failed_write_ = false;
+        context_write_error_.clear();
+        context_popup_->set_busy(false);
+        context_popup_->set_validation_error(begin_error);
+        context_popup_->focus_modal();
     }
 }
 
 void Editor_Main_Window::project_context_popup()
 {
-    if (context_popup_ == nullptr || !context_session_open_)
-    {
+    if (context_popup_ == nullptr || !context_popup_open_)
         return;
-    }
+
     context_popup_->project_to(
         shell_,
-        context_session_state_,
         context_anchor_rect_,
         shell_->cursor_geometry().cell_size);
 }
 
-void Editor_Main_Window::clear_context_session()
+void Editor_Main_Window::clear_context_popup()
 {
     if (context_popup_ != nullptr)
     {
@@ -742,20 +701,18 @@ void Editor_Main_Window::clear_context_session()
         context_popup_->deleteLater();
         context_popup_ = nullptr;
     }
-    context_session_state_ = {};
     context_fields_.clear();
     context_source_ = {};
-    context_session_id_ = 0;
-    context_preview_changedtick_ = 0;
-    context_preview_editing_ = false;
-    context_anchor_rect_ = {};
     context_rearm_request_id_ = 0;
-    context_session_open_ = false;
+    context_popup_open_ = false;
     context_write_pending_ = false;
+    context_close_after_write_ = false;
     context_rearming_ = false;
     context_rearm_failed_write_ = false;
     context_write_error_.clear();
+    context_anchor_rect_ = {};
 }
+
 void Editor_Main_Window::open_generated_form(
     const Buffer_Snapshot& snapshot)
 {
@@ -784,6 +741,12 @@ void Editor_Main_Window::open_generated_form(
         return;
     }
 
+    if (transactions_->is_active())
+        transactions_->cancel();
+    if (context_popup_ != nullptr)
+        clear_context_popup();
+
+    reset_generated_form_write();
     if (generated_form_ != nullptr)
     {
         generated_form_->close();
@@ -799,33 +762,31 @@ void Editor_Main_Window::open_generated_form(
             const Author_Value_Owned& original,
             const Author_Value_Owned& value)
         {
+            Q_UNUSED(original);
             QString error;
-            if (!transactions_->begin_form_field_edit(
-                    document, field, original, &error) ||
-                !transactions_->preview_field(field.id, value, &error))
+            if (!runtime_host_->preview_author_field(
+                    document.document_id,
+                    document.root_object_id,
+                    field.id,
+                    value,
+                    &error))
             {
+                if (generated_form_ != nullptr)
+                    generated_form_->set_validation_error(error);
                 neovim_->notify_user(error, true);
+            }
+            else if (generated_form_ != nullptr)
+            {
+                generated_form_->set_validation_error(QString());
             }
         });
     connect(
         generated_form_,
-        &Generated_Form::fieldCommitRequested,
+        &Generated_Form::writeRequested,
         this,
-        [this](
-            const Document_Handle& document,
-            const Field_Descriptor& field,
-            const Author_Value_Owned& original,
-            const Author_Value_Owned& value)
+        [this](bool close_after_write)
         {
-            QString error;
-            if (!transactions_->begin_form_field_edit(
-                    document, field, original, &error) ||
-                !transactions_->preview_field(field.id, value, &error))
-            {
-                neovim_->notify_user(error, true);
-                return;
-            }
-            transactions_->accept();
+            begin_generated_form_write(close_after_write);
         });
     const QPointer<Generated_Form> form = generated_form_;
     connect(
@@ -834,7 +795,8 @@ void Editor_Main_Window::open_generated_form(
         this,
         [this, form]()
         {
-            transactions_->cancel();
+            if (generated_form_ == form)
+                cancel_generated_form();
             QTimer::singleShot(
                 0,
                 this,
@@ -849,10 +811,11 @@ void Editor_Main_Window::open_generated_form(
     generated_form_->show();
     generated_form_->raise();
     generated_form_->activateWindow();
-    generated_form_->focus_first_control();
+    generated_form_->focus_modal();
 }
 
-void Editor_Main_Window::refresh_generated_form()
+void Editor_Main_Window::refresh_generated_form(
+    Author_Field_Id committed_field)
 {
 
     if (generated_form_ == nullptr)
@@ -884,7 +847,160 @@ void Editor_Main_Window::refresh_generated_form()
         neovim_->notify_user(error, true);
         return;
     }
-    generated_form_->refresh(document, values);
+    generated_form_->refresh(document, values, committed_field);
+    generated_form_->replay_previews();
+}
+
+void Editor_Main_Window::begin_generated_form_write(bool close_after_write)
+{
+    if (generated_form_ == nullptr || generated_form_write_pending_)
+        return;
+
+    generated_form_write_pending_ = true;
+    generated_form_close_after_write_ = close_after_write;
+    generated_form_write_error_.clear();
+    generated_form_->set_validation_error(QString());
+    generated_form_->set_busy(true);
+    continue_generated_form_write();
+}
+
+void Editor_Main_Window::continue_generated_form_write()
+{
+    if (generated_form_ == nullptr || !generated_form_write_pending_)
+    {
+        reset_generated_form_write();
+        return;
+    }
+
+    Field_Descriptor field;
+    Author_Value_Owned original;
+    Author_Value_Owned value;
+    if (!generated_form_->next_dirty_edit(&field, &original, &value))
+    {
+        const bool close_after_write = generated_form_close_after_write_;
+        reset_generated_form_write();
+        generated_form_->set_busy(false);
+        generated_form_->set_validation_error(QString());
+        if (close_after_write)
+        {
+            generated_form_->close_committed();
+            neovim_->focus_editor();
+        }
+        else
+        {
+            generated_form_->focus_modal();
+        }
+        return;
+    }
+
+    generated_form_write_field_ = field.id;
+    generated_form_write_base_tick_ =
+        generated_form_->document().changedtick;
+    generated_form_transaction_accepted_ = false;
+    generated_form_document_refreshed_ = false;
+    generated_form_write_error_.clear();
+
+    QString error;
+    if (!transactions_->begin_form_field_edit(
+            generated_form_->document(),
+            field,
+            original,
+            &error) ||
+        !transactions_->preview_field(field.id, value, &error))
+    {
+        fail_generated_form_write(error);
+        return;
+    }
+    transactions_->accept();
+}
+
+void Editor_Main_Window::maybe_finish_generated_form_write_step()
+{
+    if (!generated_form_write_pending_ ||
+        !generated_form_transaction_accepted_ ||
+        !generated_form_document_refreshed_)
+    {
+        return;
+    }
+
+    const Author_Field_Id committed_field = generated_form_write_field_;
+    generated_form_transaction_accepted_ = false;
+    generated_form_document_refreshed_ = false;
+    generated_form_write_field_ = 0;
+    generated_form_write_base_tick_ = 0;
+
+    refresh_generated_form(committed_field);
+    if (generated_form_ == nullptr)
+    {
+        reset_generated_form_write();
+        return;
+    }
+    continue_generated_form_write();
+}
+
+void Editor_Main_Window::fail_generated_form_write(const QString& error)
+{
+    const QPointer<Generated_Form> form = generated_form_;
+    QString message = error.isEmpty()
+        ? QStringLiteral("form write failed")
+        : error;
+    const Author_Document_Id document_id =
+        form == nullptr ? 0 : form->document().document_id;
+
+    reset_generated_form_write();
+    if (transactions_->is_active())
+        transactions_->cancel();
+
+    if (document_id != 0)
+    {
+        QString rehydrate_error;
+        if (!runtime_host_->rehydrate_document(document_id, &rehydrate_error) &&
+            !rehydrate_error.isEmpty())
+        {
+            message += QStringLiteral("; ") + rehydrate_error;
+        }
+    }
+
+    if (form != nullptr)
+    {
+        form->set_busy(false);
+        form->set_validation_error(message);
+        form->replay_previews();
+        form->focus_modal();
+    }
+}
+
+void Editor_Main_Window::reset_generated_form_write()
+{
+    generated_form_write_pending_ = false;
+    generated_form_close_after_write_ = false;
+    generated_form_transaction_accepted_ = false;
+    generated_form_document_refreshed_ = false;
+    generated_form_write_field_ = 0;
+    generated_form_write_base_tick_ = 0;
+    generated_form_write_error_.clear();
+}
+
+void Editor_Main_Window::cancel_generated_form()
+{
+    if (generated_form_write_pending_)
+        return;
+
+    if (transactions_->is_active())
+        transactions_->cancel();
+
+    if (generated_form_ != nullptr)
+    {
+        QString error;
+        if (!runtime_host_->rehydrate_document(
+                generated_form_->document().document_id,
+                &error) &&
+            !error.isEmpty())
+        {
+            neovim_->notify_user(error, true);
+        }
+    }
+    reset_generated_form_write();
 }
 
 QVector<Author_Value_Owned> Editor_Main_Window::read_form_values(
@@ -1022,9 +1138,8 @@ void Editor_Main_Window::start_acceptance_smoke(
     smoke_frame_floor_ = 0;
     smoke_context_request_id_ = 0;
     smoke_context_phase_ = 0;
-    smoke_context_initial_row_ = 0;
-    smoke_context_edit_changedtick_ = 0;
-    smoke_clock_.start();
+    smoke_context_initial_field_ = 0;
+        smoke_clock_.start();
     smoke_timer_.start();
     QTimer::singleShot(
         0,
@@ -1072,11 +1187,16 @@ void Editor_Main_Window::run_smoke_step()
             false,
             QStringLiteral(
                 "timed out waiting for the integrated editor "
-                "(context phase %1, mode %2, row %3, tick %4, validation %5)")
+                "(context phase %1, mode %2, field %3, dirty %4, validation %5)")
                 .arg(smoke_context_phase_)
-                .arg(QString::fromUtf8(context_session_state_.mode))
-                .arg(context_session_state_.cursor_row)
-                .arg(context_session_state_.changedtick)
+                .arg(context_popup_ != nullptr
+                    ? QString::fromUtf8(context_popup_->mode())
+                    : QStringLiteral("closed"))
+                .arg(context_popup_ != nullptr
+                    ? context_popup_->active_field()
+                    : -1)
+                .arg(context_popup_ != nullptr &&
+                    context_popup_->is_dirty() ? 1 : 0)
                 .arg(context_popup_ != nullptr &&
                     context_popup_->has_validation_error() ? 1 : 0));
         return;
@@ -1319,109 +1439,177 @@ void Editor_Main_Window::run_smoke_step()
     {
         return;
     }
+    auto send_popup_key = [](
+        QWidget* target,
+        int key,
+        const QString& text = QString(),
+        Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+    {
+        if (target == nullptr)
+            return;
+        QKeyEvent event(QEvent::KeyPress, key, modifiers, text);
+        QApplication::sendEvent(target, &event);
+    };
+
     if (smoke_context_phase_ == 2)
     {
-        if (!context_session_open_ || context_popup_ == nullptr ||
+        if (!context_popup_open_ || context_popup_ == nullptr ||
             !context_popup_->isVisible())
         {
             return;
         }
+
         const QSize cell = shell_->cursor_geometry().cell_size;
         QWidget* focused = QApplication::focusWidget();
-        if (context_fields_.size() < 2 || !context_session_state_.mode.startsWith('n') ||
-            focused != shell_ || context_popup_->isAncestorOf(focused) ||
-            !context_popup_->has_projected_cursor() ||
+        QLabel* statusline = context_popup_->findChild<QLabel*>(
+            QStringLiteral("kalamContextStatusline"));
+        if (context_fields_.size() < 2 ||
+            context_popup_->mode() != QByteArrayLiteral("n") ||
+            focused != context_popup_ ||
+            !context_popup_->has_modal_selection() ||
             cell.height() <= 0 ||
             context_popup_->width() > 520 ||
             context_popup_->height() > 420 ||
-            shell_->height() - context_popup_->geometry().bottom() < cell.height())
+            shell_->height() - context_popup_->geometry().bottom() <
+                2 * cell.height() ||
+            statusline == nullptr ||
+            statusline->geometry().bottom() < context_popup_->height() - 4)
         {
             finish_smoke(
                 false,
-                QStringLiteral("context projection did not preserve Neovim focus, GUI cursor, mode, fields, or statusline space"));
+                QStringLiteral(
+                    "Qt context did not own Normal-mode focus, graphical selection, compact placement, or its bottom statusline"));
             return;
         }
-        smoke_context_initial_row_ = context_session_state_.cursor_row;
-        neovim_->send_input(QByteArrayLiteral("j"));
+
+        smoke_context_initial_field_ = context_popup_->active_field();
+        send_popup_key(context_popup_, Qt::Key_J, QStringLiteral("j"));
         smoke_context_phase_ = 3;
         return;
     }
     if (smoke_context_phase_ == 3)
     {
-        if (context_session_state_.cursor_row <= smoke_context_initial_row_)
+        if (context_popup_ == nullptr ||
+            context_popup_->active_field() <= smoke_context_initial_field_)
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("Qt context j did not move to the next field"));
             return;
-        neovim_->send_input(QByteArrayLiteral("i"));
+        }
+        send_popup_key(context_popup_, Qt::Key_I, QStringLiteral("i"));
         smoke_context_phase_ = 4;
         return;
     }
     if (smoke_context_phase_ == 4)
     {
-        if (!context_session_state_.mode.startsWith('i'))
+        if (context_popup_ == nullptr)
+        {
+            finish_smoke(false, QStringLiteral("Qt context closed during Insert entry"));
             return;
-        smoke_context_edit_changedtick_ = context_session_state_.changedtick;
-        neovim_->send_input(QByteArrayLiteral("x"));
+        }
+
+        QWidget* focused = QApplication::focusWidget();
+        if (context_popup_->mode() != QByteArrayLiteral("i") ||
+            focused == nullptr ||
+            focused == context_popup_ ||
+            !context_popup_->isAncestorOf(focused))
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("Qt context i did not focus the selected field in Insert mode"));
+            return;
+        }
+
+        for (int index = 0; index < 5; ++index)
+            send_popup_key(focused, Qt::Key_I, QStringLiteral("i"));
+        if (context_popup_->mode() != QByteArrayLiteral("i") ||
+            QApplication::focusWidget() == nullptr ||
+            !context_popup_->isAncestorOf(QApplication::focusWidget()))
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("Insert-mode keystrokes escaped from the Qt context"));
+            return;
+        }
+
+        QDoubleSpinBox* selected_spin = nullptr;
+        for (QWidget* candidate = QApplication::focusWidget();
+             candidate != nullptr && candidate != context_popup_;
+             candidate = candidate->parentWidget())
+        {
+            selected_spin = qobject_cast<QDoubleSpinBox*>(candidate);
+            if (selected_spin != nullptr)
+                break;
+        }
+        if (selected_spin == nullptr)
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("Qt context Insert target was not the selected numeric field"));
+            return;
+        }
+        selected_spin->setValue(
+            selected_spin->value() + selected_spin->singleStep());
         smoke_context_phase_ = 5;
         return;
     }
     if (smoke_context_phase_ == 5)
     {
-        if (!context_session_state_.mode.startsWith('i') ||
-            context_session_state_.changedtick <= smoke_context_edit_changedtick_)
+        if (context_popup_ == nullptr || !context_popup_->is_dirty())
             return;
-        smoke_context_edit_changedtick_ = context_session_state_.changedtick;
-        if (context_popup_->has_validation_error())
+
+        const Document_Handle staged_document =
+            runtime_host_->document_for_buffer(context_source_.buffer);
+        if (!transactions_->is_active() ||
+            !staged_document.is_valid() ||
+            staged_document.changedtick != context_source_.changedtick)
         {
             finish_smoke(
                 false,
-                QStringLiteral("context showed a hard validation error for temporary Insert-mode JSON"));
+                QStringLiteral(
+                    "Qt staging changed the source document before an explicit write"));
             return;
         }
-        neovim_->send_input(QByteArrayLiteral("<Esc>"));
+
+        send_popup_key(QApplication::focusWidget(), Qt::Key_Escape);
         smoke_context_phase_ = 6;
         return;
     }
     if (smoke_context_phase_ == 6)
     {
-        if (!context_session_state_.mode.startsWith('n'))
-            return;
-        if (!context_popup_->has_validation_error())
+        if (context_popup_ == nullptr ||
+            context_popup_->mode() != QByteArrayLiteral("n") ||
+            QApplication::focusWidget() != context_popup_)
         {
             finish_smoke(
                 false,
-                QStringLiteral("context did not validate incomplete JSON after leaving Insert mode"));
+                QStringLiteral("Escape did not return Qt context focus to Normal mode"));
             return;
         }
-        neovim_->send_input(QByteArrayLiteral("u"));
-        smoke_context_phase_ = 7;
-        return;
-    }
-    if (smoke_context_phase_ == 7)
-    {
-        if (context_session_state_.changedtick <= smoke_context_edit_changedtick_ ||
-            context_popup_->has_validation_error())
-            return;
-        smoke_context_phase_ = 8;
-        return;
-    }
-    if (smoke_context_phase_ == 8)
-    {
+
         if (!smoke_screenshot_path_.isEmpty() &&
             !grab().save(smoke_screenshot_path_))
         {
             finish_smoke(false, QStringLiteral("could not save context smoke screenshot"));
             return;
         }
-        neovim_->close_context_session(context_session_id_, true);
-        smoke_context_phase_ = 9;
+
+        send_popup_key(context_popup_, Qt::Key_Colon, QStringLiteral(":"));
+        send_popup_key(context_popup_, Qt::Key_Q, QStringLiteral("q"));
+        send_popup_key(context_popup_, Qt::Key_Exclam, QStringLiteral("!"));
+        send_popup_key(context_popup_, Qt::Key_Return);
+        smoke_context_phase_ = 7;
         return;
     }
-    if (smoke_context_phase_ == 9)
+    if (smoke_context_phase_ == 7)
     {
-        if (context_session_id_ != 0 || transactions_->is_active())
+        if (context_popup_ != nullptr || transactions_->is_active())
             return;
         finish_smoke(
             true,
-            QStringLiteral("integrated Neovim, WARP viewport, documents, selection, preview rollback, rendering, and Neovim-owned Qt context interaction passed"));
+            QStringLiteral(
+                "integrated Neovim, WARP viewport, documents, selection, preview rollback, rendering, and Qt-owned modal context staging passed"));
     }
 }
 

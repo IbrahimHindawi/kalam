@@ -9,7 +9,6 @@
 class QCheckBox;
 class QColorDialog;
 class QDoubleSpinBox;
-class QEvent;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -32,12 +31,12 @@ public:
     Author_Value_Owned value() const;
     void set_value(const Author_Value_Owned& value);
     void set_keyboard_passive(bool passive);
-    void set_projected_cursor(
-        bool active,
-        const QByteArray& value_json,
-        qint64 byte_column,
-        const QByteArray& mode);
-    bool has_projected_cursor() const;
+    QVector<QWidget*> editable_controls() const;
+    int editable_component_count() const;
+    int component_for_descendant(const QObject* object) const;
+    void set_modal_selection(bool active, int component, bool insert_mode);
+    void focus_component(int component);
+    bool has_modal_selection() const;
     void focus_first_control();
 
 signals:
@@ -56,17 +55,13 @@ private:
     QLineEdit* line_edit_ = nullptr;
     QPushButton* color_button_ = nullptr;
     QColorDialog* color_dialog_ = nullptr;
-    QLabel* projected_cursor_ = nullptr;
-    QWidget* projected_cursor_control_ = nullptr;
-    QWidget* projected_cursor_target_ = nullptr;
+    QWidget* modal_selection_control_ = nullptr;
     Author_Value_Owned color_dialog_original_;
     bool updating_ = false;
 
-    bool eventFilter(QObject* watched, QEvent* event) override;
     void build_numeric_editor();
     void choose_color();
-    void clear_projected_cursor();
-    void position_projected_cursor();
+    void clear_modal_selection();
     void publish_preview();
     void publish_commit();
     int spin_component_count() const;

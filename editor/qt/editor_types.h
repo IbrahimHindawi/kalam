@@ -24,24 +24,6 @@ struct Cursor_Geometry
     QRect cursor_rect;
 };
 
-struct Context_Session_State
-{
-    qint64 session_id = 0;
-    qint64 buffer = 0;
-    qint64 window = 0;
-    quint64 changedtick = 0;
-    QByteArray text_utf8;
-    QByteArray mode;
-    qint64 cursor_row = 0;
-    qint64 cursor_column = 0;
-    qint64 window_row = 0;
-    qint64 window_column = 0;
-    qint64 window_width = 0;
-    qint64 window_height = 0;
-    bool modified = false;
-    bool write_pending = false;
-};
-
 struct Source_Range
 {
     qint64 start_row = 0;
@@ -70,6 +52,8 @@ struct Source_Context
 {
     qint64 buffer = 0;
     quint64 changedtick = 0;
+    qint64 screen_row = -1;
+    qint64 screen_column = -1;
     QString json_path;
     QByteArray node_type;
     Source_Range range;
@@ -227,7 +211,6 @@ struct Viewport_Interaction_Result
 } // namespace Kalam::Editor
 
 Q_DECLARE_METATYPE(Kalam::Editor::Cursor_Geometry)
-Q_DECLARE_METATYPE(Kalam::Editor::Context_Session_State)
 Q_DECLARE_METATYPE(Kalam::Editor::Buffer_Snapshot)
 Q_DECLARE_METATYPE(Kalam::Editor::Source_Context)
 Q_DECLARE_METATYPE(Kalam::Editor::Diagnostic)

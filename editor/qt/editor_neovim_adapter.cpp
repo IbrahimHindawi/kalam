@@ -1,6 +1,5 @@
 #include "editor_neovim_adapter.h"
 
-#include "author_transaction_controller.h"
 #include "editor_neovim_shell.h"
 
 #include "auto/neovimapi0.h"
@@ -260,116 +259,6 @@ quint64 Editor_Neovim_Adapter::patch_text(
     return request_id;
 }
 
-void Editor_Neovim_Adapter::open_context_session(
-    const QVector<Field_Descriptor>& fields,
-    const QVector<Author_Value_Owned>& values,
-    const Source_Context& context)
-{
-    if (fields.size() != values.size())
-    {
-        notify_user(QStringLiteral("context field/value count mismatch"), true);
-        return;
-    }
-
-    QVariantList field_specs;
-    field_specs.reserve(fields.size());
-    for (qsizetype index = 0; index < fields.size(); ++index)
-    {
-        QVariantMap field;
-        field.insert(
-            QStringLiteral("name"),
-            QString::fromUtf8(fields.at(index).name));
-        field.insert(
-            QStringLiteral("value_json"),
-            QString::fromUtf8(
-                Author_Transaction_Controller::format_value_json(
-                    fields.at(index),
-                    values.at(index))));
-        field_specs.push_back(field);
-    }
-
-    QVariantMap argument;
-    argument.insert(QStringLiteral("fields"), field_specs);
-    argument.insert(QStringLiteral("source_buffer"), context.buffer);
-    argument.insert(QStringLiteral("json_path"), context.json_path);
-    call_lua(
-        QByteArrayLiteral(
-            "(function() local r,e=require('nveditor').open_context_session(_A); "
-            "if not r then vim.notify(e,vim.log.levels.ERROR) end; return r end)()"),
-        argument);
-}
-
-void Editor_Neovim_Adapter::update_context_session_field(
-    qint64 session_id,
-    const QByteArray& field_name,
-    const QByteArray& value_json)
-{
-    QVariantMap argument;
-    argument.insert(QStringLiteral("session_id"), session_id);
-    argument.insert(QStringLiteral("name"), QString::fromUtf8(field_name));
-    argument.insert(QStringLiteral("value_json"), QString::fromUtf8(value_json));
-    call_lua(
-        QByteArrayLiteral(
-            "(function() local r,e=require('nveditor').update_context_session_field("
-            "_A.session_id,_A.name,_A.value_json); if not r then "
-            "vim.notify(e,vim.log.levels.ERROR) end; return r end)()"),
-        argument);
-}
-
-void Editor_Neovim_Adapter::finish_context_session_write(
-    qint64 session_id,
-    bool succeeded,
-    const QString& message)
-{
-    QVariantMap argument;
-    argument.insert(QStringLiteral("session_id"), session_id);
-    argument.insert(QStringLiteral("succeeded"), succeeded);
-    argument.insert(QStringLiteral("message"), message);
-    call_lua(
-        QByteArrayLiteral(
-            "require('nveditor').finish_context_session_write("
-            "_A.session_id,_A.succeeded,_A.message)"),
-        argument);
-}
-
-void Editor_Neovim_Adapter::request_context_session_write(
-    qint64 session_id,
-    bool close_after_write)
-{
-    QVariantMap argument;
-    argument.insert(QStringLiteral("session_id"), session_id);
-    argument.insert(QStringLiteral("close_after_write"), close_after_write);
-    call_lua(
-        QByteArrayLiteral(
-            "(function() local r,e=require('nveditor').request_context_session_write("
-            "_A.session_id,_A.close_after_write); if not r then "
-            "vim.notify(e,vim.log.levels.ERROR) end; return r end)()"),
-        argument);
-}
-
-void Editor_Neovim_Adapter::close_context_session(
-    qint64 session_id,
-    bool force)
-{
-    QVariantMap argument;
-    argument.insert(QStringLiteral("session_id"), session_id);
-    argument.insert(QStringLiteral("force"), force);
-    call_lua(
-        QByteArrayLiteral(
-            "(function() local r,e=require('nveditor').close_context_session("
-            "_A.session_id,_A.force); if not r then "
-            "vim.notify(e,vim.log.levels.ERROR) end; return r end)()"),
-        argument);
-}
-
-void Editor_Neovim_Adapter::send_input(const QByteArray& keys)
-{
-    if (is_ready())
-    {
-        api_->vim_input(keys);
-    }
-}
-
 void Editor_Neovim_Adapter::set_quickfix(
     const QVector<Diagnostic>& diagnostics,
     const QString& title,
@@ -535,20 +424,7 @@ void Editor_Neovim_Adapter::handle_notification(
             snapshot_from_map(payload),
             first_diagnostic(payload));
     }
-    else if (name == QByteArrayLiteral("nveditor.context_session_changed"))
-    {
-        emit contextSessionChanged(context_session_from_map(payload));
-    }
-    else if (name == QByteArrayLiteral("nveditor.context_session_write"))
-    {
-        emit contextSessionWriteRequested(context_session_from_map(payload));
-    }
-    else if (name == QByteArrayLiteral("nveditor.context_session_closed"))
-    {
-        emit contextSessionClosed(
-            payload.value(QStringLiteral("session_id")).toLongLong(),
-            payload.value(QStringLiteral("write_pending")).toBool());
-    }
+
 }
 
 quint64 Editor_Neovim_Adapter::allocate_request_id()
@@ -626,6 +502,10 @@ Source_Context Editor_Neovim_Adapter::context_from_map(
     context.buffer = map.value(QStringLiteral("bufnr")).toLongLong();
     context.changedtick =
         map.value(QStringLiteral("changedtick")).toULongLong();
+    context.screen_row =
+        map.value(QStringLiteral("screen_row"), -1).toLongLong();
+    context.screen_column =
+        map.value(QStringLiteral("screen_column"), -1).toLongLong();
     context.json_path = map.value(QStringLiteral("json_path")).toString();
     context.node_type = map.value(QStringLiteral("node_type")).toByteArray();
     context.range.start_row =
@@ -643,27 +523,6 @@ Source_Context Editor_Neovim_Adapter::context_from_map(
     context.range_fallback =
         map.value(QStringLiteral("range_fallback")).toBool();
     return context;
-}
-
-Context_Session_State Editor_Neovim_Adapter::context_session_from_map(
-    const QVariantMap& map)
-{
-    Context_Session_State state;
-    state.session_id = map.value(QStringLiteral("session_id")).toLongLong();
-    state.buffer = map.value(QStringLiteral("bufnr")).toLongLong();
-    state.window = map.value(QStringLiteral("window")).toLongLong();
-    state.changedtick = map.value(QStringLiteral("changedtick")).toULongLong();
-    state.text_utf8 = map.value(QStringLiteral("text")).toString().toUtf8();
-    state.mode = map.value(QStringLiteral("mode")).toByteArray();
-    state.cursor_row = map.value(QStringLiteral("cursor_row")).toLongLong();
-    state.cursor_column = map.value(QStringLiteral("cursor_column")).toLongLong();
-    state.window_row = map.value(QStringLiteral("window_row")).toLongLong();
-    state.window_column = map.value(QStringLiteral("window_column")).toLongLong();
-    state.window_width = map.value(QStringLiteral("window_width")).toLongLong();
-    state.window_height = map.value(QStringLiteral("window_height")).toLongLong();
-    state.modified = map.value(QStringLiteral("modified")).toBool();
-    state.write_pending = map.value(QStringLiteral("write_pending")).toBool();
-    return state;
 }
 
 QString Editor_Neovim_Adapter::first_diagnostic(const QVariantMap& map)

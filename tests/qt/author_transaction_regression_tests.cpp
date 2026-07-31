@@ -535,81 +535,6 @@ void test_accept_issues_one_patch_and_closes_accepted()
         QStringLiteral("accepted transaction clears controller state"));
 }
 
-void test_context_staging_parser()
-{
-    QVector<Field_Descriptor> fields;
-    Field_Descriptor exposure = make_field();
-    fields.push_back(exposure);
-
-    Field_Descriptor enabled;
-    enabled.id = 98;
-    enabled.name = QByteArrayLiteral("enabled");
-    enabled.kind = Author_Field_Bool;
-    fields.push_back(enabled);
-
-    Field_Descriptor position;
-    position.id = 99;
-    position.name = QByteArrayLiteral("position");
-    position.kind = Author_Field_Vec3;
-    fields.push_back(position);
-
-    Field_Descriptor label;
-    label.id = 100;
-    label.name = QByteArrayLiteral("label");
-    label.kind = Author_Field_String;
-    fields.push_back(label);
-
-    Field_Descriptor transform;
-    transform.id = 101;
-    transform.name = QByteArrayLiteral("transform");
-    transform.kind = Author_Field_Transform;
-    fields.push_back(transform);
-
-    const QByteArray text = QByteArrayLiteral(
-        "{\n"
-        "  \"exposure\": 1.25,\n"
-        "  \"enabled\": true,\n"
-        "  \"position\": [1,2,3],\n"
-        "  \"label\": \"key light\",\n"
-        "  \"transform\": {\"translation\":[4,5,6],"
-        "\"rotation_degrees\":[10,20,30],\"scale\":[1,1,1]}\n"
-        "}");
-    QVector<Author_Value_Owned> values;
-    QString error;
-    check(
-        Author_Transaction_Controller::parse_context_values(
-            fields, text, &values, &error),
-        QStringLiteral("typed context staging JSON parses: %1").arg(error));
-    check(
-        values.size() == 5 && values.at(0).f32[0] == 1.25f &&
-            values.at(1).boolean && values.at(2).f32[2] == 3.0f &&
-            values.at(3).string_utf8 == QByteArrayLiteral("key light") &&
-            values.at(4).transform.translation[1] == 5.0f &&
-            values.at(4).transform.rotation_degrees[2] == 30.0f,
-        QStringLiteral("typed context values retain schema kinds and components"));
-
-    check(
-        !Author_Transaction_Controller::parse_context_values(
-            fields,
-            QByteArrayLiteral("{\"exposure\":\"wrong\"}"),
-            &values,
-            &error),
-        QStringLiteral("wrong field set and type are rejected"));
-    check(
-        !Author_Transaction_Controller::parse_context_values(
-            QVector<Field_Descriptor>{exposure},
-            QByteArrayLiteral("{\"exposure\":1.0,\"extra\":2}"),
-            &values,
-            &error),
-        QStringLiteral("unexpected staging fields are rejected"));
-    check(
-        !Author_Transaction_Controller::parse_context_values(
-            QVector<Field_Descriptor>{position},
-            QByteArrayLiteral("{\"position\":[1,2]}"),
-            &values,
-            &error),
-        QStringLiteral("wrong vector arity is rejected"));
-}
 } // namespace
 
 int main(int argument_count, char** arguments)
@@ -618,7 +543,6 @@ int main(int argument_count, char** arguments)
     test_changedtick_race_cancels_and_rehydrates();
     test_rpc_patch_failure_cancels_and_rehydrates();
     test_accept_issues_one_patch_and_closes_accepted();
-    test_context_staging_parser();
     if (failures == 0)
     {
         qInfo().noquote() <<
