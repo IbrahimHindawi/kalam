@@ -275,6 +275,39 @@ void test_graphical_cursor_projection(QApplication* application)
     check(cursor != nullptr &&
               cursor->property("kalamInsertCursor").toBool(),
           QStringLiteral("projected GUI cursor tracks Neovim Insert mode"));
+
+    QWidget shell;
+    shell.resize(1280, 720);
+    shell.show();
+    Kalam::Editor::Context_Popup compact_popup(
+        {transform_field, color_field},
+        {transform_value, color_value},
+        &shell);
+    Kalam::Editor::Context_Session_State state;
+    state.window_row = 0;
+    state.window_column = 0;
+    state.window_width = 160;
+    state.window_height = 50;
+    const QRect source_cursor(600, 300, 8, 18);
+    compact_popup.project_to(
+        &shell,
+        state,
+        source_cursor,
+        QSize(8, 18));
+    application->processEvents();
+
+    check(
+        compact_popup.isVisible() &&
+            compact_popup.width() <= 520 &&
+            compact_popup.height() <= 420,
+        QStringLiteral("context popup stays compact even when Neovim reports an editor-sized window"));
+    check(
+        compact_popup.geometry().left() > source_cursor.right(),
+        QStringLiteral("context popup opens beside the captured source cursor"));
+    check(
+        compact_popup.geometry().right() < shell.width() &&
+            compact_popup.geometry().bottom() <= shell.height() - 22,
+        QStringLiteral("context popup remains inside the editor and preserves statusline space"));
 }
 
 } // namespace

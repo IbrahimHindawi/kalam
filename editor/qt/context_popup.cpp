@@ -5,6 +5,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
 #include <QPushButton>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -73,7 +74,6 @@ Context_Popup::Context_Popup(
             &Context_Popup::fieldPreviewRequested);
     }
     root_layout->addLayout(form);
-    root_layout->addStretch(1);
 
     auto* hint = new QLabel(
         QStringLiteral("j/k fields  |  h/l components  |  i edit  |  Esc normal"),
@@ -118,10 +118,10 @@ Context_Popup::Context_Popup(
 void Context_Popup::project_to(
     QWidget* shell,
     const Context_Session_State& state,
+    const QRect& anchor_rect,
     const QSize& cell_size)
 {
-    if (shell == nullptr || cell_size.width() <= 0 || cell_size.height() <= 0 ||
-        state.window_width <= 0 || state.window_height <= 0)
+    if (shell == nullptr || cell_size.width() <= 0 || cell_size.height() <= 0)
     {
         hide();
         return;
@@ -131,18 +131,58 @@ void Context_Popup::project_to(
         setParent(shell);
     }
 
-    const QRect requested(
-        static_cast<int>(state.window_column) * cell_size.width(),
-        static_cast<int>(state.window_row) * cell_size.height(),
-        static_cast<int>(state.window_width) * cell_size.width(),
-        static_cast<int>(state.window_height) * cell_size.height());
-    const QRect visible = requested.intersected(shell->rect());
-    if (!visible.isValid() || visible.isEmpty())
+    const int margin = qMax(4, cell_size.width() / 2);
+    QRect available = shell->rect().adjusted(
+        margin,
+        margin,
+        -margin,
+        -(cell_size.height() + margin));
+    if (!available.isValid() || available.isEmpty())
     {
         hide();
         return;
     }
-    setGeometry(visible);
+
+    ensurePolished();
+    if (layout() != nullptr)
+        layout()->activate();
+    const QSize hint = sizeHint();
+    const int maximum_width = qMin(520, available.width());
+    const int maximum_height = qMin(420, available.height());
+    const int minimum_width = qMin(360, maximum_width);
+    const int minimum_height = qMin(160, maximum_height);
+    const QSize popup_size(
+        qBound(minimum_width, hint.width(), maximum_width),
+        qBound(minimum_height, hint.height(), maximum_height));
+
+    QRect anchor = anchor_rect;
+    if (!anchor.isValid() || anchor.isEmpty())
+    {
+        anchor = QRect(
+            static_cast<int>(state.window_column) * cell_size.width(),
+            static_cast<int>(state.window_row) * cell_size.height(),
+            cell_size.width(),
+            cell_size.height());
+    }
+
+    const int gap = qMax(4, cell_size.width());
+    int x = anchor.right() + 1 + gap;
+    if (x + popup_size.width() - 1 > available.right())
+        x = anchor.left() - gap - popup_size.width();
+    x = qBound(
+        available.left(),
+        x,
+        available.right() - popup_size.width() + 1);
+
+    int y = anchor.top();
+    if (y + popup_size.height() - 1 > available.bottom())
+        y = anchor.bottom() - popup_size.height() + 1;
+    y = qBound(
+        available.top(),
+        y,
+        available.bottom() - popup_size.height() + 1);
+
+    setGeometry(QRect(QPoint(x, y), popup_size));
     show();
     raise();
 }
@@ -210,6 +250,11 @@ bool Context_Popup::has_projected_cursor() const
             return true;
     }
     return false;
+}
+
+bool Context_Popup::has_validation_error() const
+{
+    return validation_label_ != nullptr && !validation_label_->text().isEmpty();
 }
 
 void Context_Popup::refresh_projected_cursor()

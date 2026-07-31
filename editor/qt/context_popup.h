@@ -26,6 +26,7 @@ public:
     void project_to(
         QWidget* shell,
         const Context_Session_State& state,
+        const QRect& anchor_rect,
         const QSize& cell_size);
     void set_values(const QVector<Author_Value_Owned>& values);
     void set_active_field(qsizetype field_index);
@@ -35,6 +36,7 @@ public:
         qint64 row,
         qint64 byte_column);
     bool has_projected_cursor() const;
+    bool has_validation_error() const;
     void set_validation_error(const QString& error);
 
 signals:

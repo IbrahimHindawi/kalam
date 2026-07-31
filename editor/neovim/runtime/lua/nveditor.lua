@@ -960,6 +960,200 @@ local function context_session_lines(session)
   return lines
 end
 
+local function context_scalar_columns(line)
+  local colon = line:find(":", 1, true)
+  if not colon then
+    return {}
+  end
+
+  local result = {}
+  local cursor = colon + 1
+  local size = #line
+  while cursor <= size do
+    local byte = line:byte(cursor)
+    if byte == 34 then
+      local start = cursor
+      cursor = cursor + 1
+      while cursor <= size do
+        byte = line:byte(cursor)
+        if byte == 92 and cursor < size then
+          cursor = cursor + 2
+        elseif byte == 34 then
+          cursor = cursor + 1
+          break
+        else
+          cursor = cursor + 1
+        end
+      end
+      local after = cursor
+      while after <= size
+          and (line:byte(after) == 32 or line:byte(after) == 9) do
+        after = after + 1
+      end
+      if line:byte(after) ~= 58 then
+        table.insert(result, start - 1)
+      end
+    elseif (byte >= 48 and byte <= 57) or byte == 45 then
+      table.insert(result, cursor - 1)
+      cursor = cursor + 1
+      while cursor <= size do
+        byte = line:byte(cursor)
+        if not ((byte >= 48 and byte <= 57)
+            or byte == 43 or byte == 45 or byte == 46
+            or byte == 69 or byte == 101) then
+          break
+        end
+        cursor = cursor + 1
+      end
+    elseif line:sub(cursor, cursor + 3) == "true"
+        or line:sub(cursor, cursor + 3) == "null" then
+      table.insert(result, cursor - 1)
+      cursor = cursor + 4
+    elseif line:sub(cursor, cursor + 4) == "false" then
+      table.insert(result, cursor - 1)
+      cursor = cursor + 5
+    else
+      cursor = cursor + 1
+    end
+  end
+  return result
+end
+
+local function closest_context_component(columns, column)
+  if #columns == 0 then
+    return 1
+  end
+  local closest = 1
+  local distance = math.abs(columns[1] - column)
+  for index = 2, #columns do
+    local candidate = math.abs(columns[index] - column)
+    if candidate < distance then
+      closest = index
+      distance = candidate
+    end
+  end
+  return closest
+end
+
+local function set_context_field_cursor(session, field_index, component_index)
+  if not session.window or not vim.api.nvim_win_is_valid(session.window) then
+    return
+  end
+  field_index = math.max(1, math.min(#session.fields, field_index))
+  local row = field_index + 1
+  local line = vim.api.nvim_buf_get_lines(
+    session.buffer, row - 1, row, true
+  )[1] or ""
+  local columns = context_scalar_columns(line)
+  component_index = math.max(
+    1,
+    math.min(#columns > 0 and #columns or 1, component_index or 1)
+  )
+  local column = columns[component_index]
+  if column == nil then
+    local colon = line:find(":", 1, true)
+    column = colon or 0
+    while column < #line do
+      local byte = line:byte(column + 1)
+      if byte ~= 32 and byte ~= 9 then
+        break
+      end
+      column = column + 1
+    end
+  end
+  vim.api.nvim_win_set_cursor(session.window, { row, column })
+end
+
+local function move_context_field(session, direction)
+  if not session.window or not vim.api.nvim_win_is_valid(session.window) then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(session.window)
+  local field_index = math.max(1, math.min(#session.fields, cursor[1] - 1))
+  local line = vim.api.nvim_buf_get_lines(
+    session.buffer, field_index, field_index + 1, true
+  )[1] or ""
+  local component = closest_context_component(
+    context_scalar_columns(line),
+    cursor[2]
+  )
+  set_context_field_cursor(session, field_index + direction, component)
+end
+
+local function move_context_component(session, direction)
+  if not session.window or not vim.api.nvim_win_is_valid(session.window) then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(session.window)
+  local field_index = math.max(1, math.min(#session.fields, cursor[1] - 1))
+  local line = vim.api.nvim_buf_get_lines(
+    session.buffer, field_index, field_index + 1, true
+  )[1] or ""
+  local columns = context_scalar_columns(line)
+  local component = closest_context_component(columns, cursor[2])
+  set_context_field_cursor(session, field_index, component + direction)
+end
+
+local function map_context_navigation(session)
+  local options = {
+    buffer = session.buffer,
+    silent = true,
+    nowait = true,
+  }
+  vim.keymap.set("n", "j", function()
+    move_context_field(session, 1)
+  end, vim.tbl_extend("force", options, { desc = "Next Kalam field" }))
+  vim.keymap.set("n", "k", function()
+    move_context_field(session, -1)
+  end, vim.tbl_extend("force", options, { desc = "Previous Kalam field" }))
+  vim.keymap.set("n", "l", function()
+    move_context_component(session, 1)
+  end, vim.tbl_extend("force", options, { desc = "Next Kalam component" }))
+  vim.keymap.set("n", "h", function()
+    move_context_component(session, -1)
+  end, vim.tbl_extend("force", options, { desc = "Previous Kalam component" }))
+end
+
+local function context_float_config(origin_window, lines)
+  local total_columns = math.max(1, vim.o.columns)
+  local total_lines = math.max(1, vim.o.lines - vim.o.cmdheight)
+  local widest = 1
+  for _, line in ipairs(lines) do
+    widest = math.max(widest, vim.fn.strdisplaywidth(line))
+  end
+  local width = math.min(
+    math.max(1, total_columns - 2),
+    math.max(32, math.min(64, widest + 2))
+  )
+  local height = math.min(
+    math.max(1, total_lines - 2),
+    math.max(3, #lines)
+  )
+  local origin_cursor = vim.api.nvim_win_get_cursor(origin_window)
+  local screen = vim.fn.screenpos(
+    origin_window,
+    origin_cursor[1],
+    origin_cursor[2] + 1
+  )
+  local cursor_row = math.max(0, (tonumber(screen.row) or 1) - 1)
+  local cursor_column = math.max(0, (tonumber(screen.col) or 1) - 1)
+  local column = cursor_column + 2
+  if column + width > total_columns then
+    column = math.max(0, cursor_column - width - 1)
+  end
+  local row = math.min(cursor_row, math.max(0, total_lines - height))
+  return {
+    relative = "editor",
+    row = row,
+    col = column,
+    width = width,
+    height = height,
+    style = "minimal",
+    focusable = true,
+    zindex = 1,
+  }
+end
+
 local function context_window_geometry(window)
   if not window or not vim.api.nvim_win_is_valid(window) then
     return 0, 0, 0, 0
@@ -1005,7 +1199,6 @@ end
 
 local function apply_context_statusline(session)
   if session.window and vim.api.nvim_win_is_valid(session.window) then
-    vim.o.laststatus = 2
     vim.wo[session.window].statusline = session.statusline
   end
 end
@@ -1076,18 +1269,12 @@ local function forget_context_session(session)
   end
   context_sessions[session.id] = nil
   context_session_by_buffer[session.buffer] = nil
-  if next(context_sessions) == nil then
-    if session.paused_lualine and type(session.lualine) == "table"
-        and type(session.lualine.hide) == "function" then
-      pcall(session.lualine.hide, {
-        place = { "statusline" },
-        unhide = true,
-      })
+  vim.schedule(function()
+    if session.origin_window
+        and vim.api.nvim_win_is_valid(session.origin_window) then
+      pcall(vim.api.nvim_set_current_win, session.origin_window)
     end
-    if session.old_laststatus ~= nil then
-      vim.o.laststatus = session.old_laststatus
-    end
-  end
+  end)
   rpc_notify("nveditor.context_session_closed", {
     session_id = session.id,
     bufnr = session.buffer,
@@ -1126,38 +1313,21 @@ function M.open_context_session(spec)
 
   local origin_window = vim.api.nvim_get_current_win()
   local origin_tab = vim.api.nvim_get_current_tabpage()
-  local old_laststatus = vim.o.laststatus
-  local lualine = package.loaded.lualine
-  local paused_lualine = false
-  if type(lualine) == "table" and type(lualine.hide) == "function" then
-    paused_lualine = pcall(lualine.hide, {
-      place = { "statusline" },
-      unhide = false,
-    })
-  end
-  vim.cmd("tabnew")
-  local window = vim.api.nvim_get_current_win()
-  local tabpage = vim.api.nvim_get_current_tabpage()
-  local buffer = vim.api.nvim_get_current_buf()
   local session_id = next_context_session_id
   next_context_session_id = next_context_session_id + 1
+  local buffer = vim.api.nvim_create_buf(false, true)
   local session = {
     id = session_id,
     buffer = buffer,
-    window = window,
-    tabpage = tabpage,
+    window = nil,
+    tabpage = origin_tab,
     origin_window = origin_window,
     origin_tab = origin_tab,
     source_buffer = tonumber(spec.source_buffer) or 0,
     json_path = tostring(spec.json_path or "$"),
     fields = fields,
     write_pending = false,
-    old_laststatus = old_laststatus,
-    paused_lualine = paused_lualine,
-    lualine = lualine,
   }
-  context_sessions[session_id] = session
-  context_session_by_buffer[buffer] = session
 
   vim.api.nvim_buf_set_name(
     buffer,
@@ -1169,7 +1339,8 @@ function M.open_context_session(spec)
   vim.bo[buffer].swapfile = false
   vim.bo[buffer].filetype = "json"
   vim.bo[buffer].modifiable = true
-  vim.api.nvim_buf_set_lines(buffer, 0, -1, true, context_session_lines(session))
+  local lines = context_session_lines(session)
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, true, lines)
   vim.bo[buffer].modified = false
   -- Treat the generated staging document like file-loaded text. This closes
   -- its seed undo block so the first keyboard or mouse edit is independently
@@ -1180,6 +1351,14 @@ function M.open_context_session(spec)
   end)
   vim.bo[buffer].modified = false
 
+  local window = vim.api.nvim_open_win(
+    buffer, true, context_float_config(origin_window, lines)
+  )
+  session.window = window
+  session.tabpage = vim.api.nvim_get_current_tabpage()
+  context_sessions[session_id] = session
+  context_session_by_buffer[buffer] = session
+
   local status_path = session.json_path:gsub("%%", "%%%%")
   session.statusline = table.concat({
     "%#StatusLine# Kalam context: ",
@@ -1187,9 +1366,8 @@ function M.open_context_session(spec)
     " %m %= :w apply  :q cancel  :q! discard  :wq apply+close ",
   })
   apply_context_statusline(session)
-  if #fields > 0 then
-    vim.api.nvim_win_set_cursor(window, { 2, 0 })
-  end
+  map_context_navigation(session)
+  set_context_field_cursor(session, 1, 1)
   vim.cmd("stopinsert")
 
   local group = vim.api.nvim_create_augroup(

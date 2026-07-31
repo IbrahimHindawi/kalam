@@ -84,6 +84,8 @@ private:
     bool context_rearming_ = false;
     bool context_rearm_failed_write_ = false;
     QString context_write_error_;
+    QRect context_anchor_rect_;
+    bool context_preview_editing_ = false;
     Cursor_Geometry cursor_geometry_;
     quint64 selection_context_request_id_ = 0;
     Document_Handle selection_document_;
@@ -100,6 +102,7 @@ private:
     quint64 smoke_context_request_id_ = 0;
     int smoke_context_phase_ = 0;
     qint64 smoke_context_initial_row_ = 0;
+    quint64 smoke_context_edit_changedtick_ = 0;
     bool close_authorized_ = false;
     bool shutting_down_ = false;
 

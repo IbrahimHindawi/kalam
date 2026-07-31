@@ -476,6 +476,7 @@ void Editor_Main_Window::open_context_popup(
     }
 
     clear_context_session();
+    context_anchor_rect_ = shell_->cursor_geometry().cursor_rect;
     context_fields_ = fields;
     context_source_ = context;
     context_popup_ = new Context_Popup(fields, values, shell_);
@@ -565,19 +566,23 @@ void Editor_Main_Window::handle_context_session_changed(
     }
     project_context_popup();
 
+    const bool editing = state.mode.startsWith('i') ||
+        state.mode.startsWith('R');
     if (context_write_pending_ ||
-        state.changedtick == context_preview_changedtick_)
+        (state.changedtick == context_preview_changedtick_ &&
+         editing == context_preview_editing_))
     {
         return;
     }
     context_preview_changedtick_ = state.changedtick;
+    context_preview_editing_ = editing;
 
     QVector<Author_Value_Owned> values;
     QString error;
     if (!Author_Transaction_Controller::parse_context_values(
             context_fields_, state.text_utf8, &values, &error))
     {
-        context_popup_->set_validation_error(error);
+        context_popup_->set_validation_error(editing ? QString() : error);
         return;
     }
     context_popup_->set_validation_error(QString());
@@ -725,6 +730,7 @@ void Editor_Main_Window::project_context_popup()
     context_popup_->project_to(
         shell_,
         context_session_state_,
+        context_anchor_rect_,
         shell_->cursor_geometry().cell_size);
 }
 
@@ -741,6 +747,8 @@ void Editor_Main_Window::clear_context_session()
     context_source_ = {};
     context_session_id_ = 0;
     context_preview_changedtick_ = 0;
+    context_preview_editing_ = false;
+    context_anchor_rect_ = {};
     context_rearm_request_id_ = 0;
     context_session_open_ = false;
     context_write_pending_ = false;
@@ -1015,6 +1023,7 @@ void Editor_Main_Window::start_acceptance_smoke(
     smoke_context_request_id_ = 0;
     smoke_context_phase_ = 0;
     smoke_context_initial_row_ = 0;
+    smoke_context_edit_changedtick_ = 0;
     smoke_clock_.start();
     smoke_timer_.start();
     QTimer::singleShot(
@@ -1061,7 +1070,15 @@ void Editor_Main_Window::run_smoke_step()
     {
         finish_smoke(
             false,
-            QStringLiteral("timed out waiting for the integrated editor"));
+            QStringLiteral(
+                "timed out waiting for the integrated editor "
+                "(context phase %1, mode %2, row %3, tick %4, validation %5)")
+                .arg(smoke_context_phase_)
+                .arg(QString::fromUtf8(context_session_state_.mode))
+                .arg(context_session_state_.cursor_row)
+                .arg(context_session_state_.changedtick)
+                .arg(context_popup_ != nullptr &&
+                    context_popup_->has_validation_error() ? 1 : 0));
         return;
     }
 
@@ -1315,6 +1332,8 @@ void Editor_Main_Window::run_smoke_step()
             focused != shell_ || context_popup_->isAncestorOf(focused) ||
             !context_popup_->has_projected_cursor() ||
             cell.height() <= 0 ||
+            context_popup_->width() > 520 ||
+            context_popup_->height() > 420 ||
             shell_->height() - context_popup_->geometry().bottom() < cell.height())
         {
             finish_smoke(
@@ -1339,18 +1358,52 @@ void Editor_Main_Window::run_smoke_step()
     {
         if (!context_session_state_.mode.startsWith('i'))
             return;
-        neovim_->send_input(QByteArrayLiteral("<Esc>"));
+        smoke_context_edit_changedtick_ = context_session_state_.changedtick;
+        neovim_->send_input(QByteArrayLiteral("x"));
         smoke_context_phase_ = 5;
         return;
     }
     if (smoke_context_phase_ == 5)
     {
-        if (!context_session_state_.mode.startsWith('n'))
+        if (!context_session_state_.mode.startsWith('i') ||
+            context_session_state_.changedtick <= smoke_context_edit_changedtick_)
             return;
+        smoke_context_edit_changedtick_ = context_session_state_.changedtick;
+        if (context_popup_->has_validation_error())
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("context showed a hard validation error for temporary Insert-mode JSON"));
+            return;
+        }
+        neovim_->send_input(QByteArrayLiteral("<Esc>"));
         smoke_context_phase_ = 6;
         return;
     }
     if (smoke_context_phase_ == 6)
+    {
+        if (!context_session_state_.mode.startsWith('n'))
+            return;
+        if (!context_popup_->has_validation_error())
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("context did not validate incomplete JSON after leaving Insert mode"));
+            return;
+        }
+        neovim_->send_input(QByteArrayLiteral("u"));
+        smoke_context_phase_ = 7;
+        return;
+    }
+    if (smoke_context_phase_ == 7)
+    {
+        if (context_session_state_.changedtick <= smoke_context_edit_changedtick_ ||
+            context_popup_->has_validation_error())
+            return;
+        smoke_context_phase_ = 8;
+        return;
+    }
+    if (smoke_context_phase_ == 8)
     {
         if (!smoke_screenshot_path_.isEmpty() &&
             !grab().save(smoke_screenshot_path_))
@@ -1359,10 +1412,10 @@ void Editor_Main_Window::run_smoke_step()
             return;
         }
         neovim_->close_context_session(context_session_id_, true);
-        smoke_context_phase_ = 7;
+        smoke_context_phase_ = 9;
         return;
     }
-    if (smoke_context_phase_ == 7)
+    if (smoke_context_phase_ == 9)
     {
         if (context_session_id_ != 0 || transactions_->is_active())
             return;

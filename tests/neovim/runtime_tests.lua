@@ -320,6 +320,7 @@ local context_event_autocmd = vim.api.nvim_create_autocmd("User", {
 })
 
 local origin_tab = vim.api.nvim_get_current_tabpage()
+local origin_window = vim.api.nvim_get_current_win()
 local origin_buffer = vim.api.nvim_get_current_buf()
 local prior_laststatus = vim.o.laststatus
 vim.o.laststatus = 3
@@ -333,16 +334,27 @@ local session, session_error = nveditor.open_context_session({
 })
 check(session ~= nil and session_error == nil, "context session opens")
 check(
-  vim.api.nvim_get_current_tabpage() ~= origin_tab,
-  "context session owns a temporary Neovim tab"
+  vim.api.nvim_get_current_tabpage() == origin_tab,
+  "context session keeps the source tab visible"
+)
+local context_window_config = vim.api.nvim_win_get_config(session.window)
+check(
+  context_window_config.relative ~= ""
+    and session.window ~= origin_window,
+  "context session uses a separate Neovim floating window"
+)
+check(
+  session.window_width < vim.o.columns
+    and session.window_height < vim.o.lines,
+  "context staging window is compact rather than editor-sized"
 )
 check(vim.api.nvim_get_current_buf() == session.bufnr, "context buffer is current")
 check(vim.bo[session.bufnr].buftype == "acwrite", "context buffer is acwrite")
 check(vim.bo[session.bufnr].filetype == "json", "context buffer has JSON motions")
 check(not vim.bo[session.bufnr].modified, "context buffer starts clean")
 check(
-  vim.o.laststatus == 2,
-  "context tab exposes its own real window-local statusline"
+  vim.o.laststatus == 3,
+  "context window preserves the user's global statusline setting"
 )
 check(
   vim.wo[session.window].statusline:match(":w apply") ~= nil
@@ -356,13 +368,35 @@ check(
   "context buffer stages named JSON fields"
 )
 
-vim.cmd("normal! j")
+local first_component_column = vim.api.nvim_win_get_cursor(session.window)[2]
+check(
+  first_component_column
+    == vim.api.nvim_buf_get_lines(session.bufnr, 1, 2, true)[1]:find("0.100", 1, true) - 1,
+  "context cursor starts on the first editable value"
+)
+vim.cmd("normal l")
+local second_component_column = vim.api.nvim_win_get_cursor(session.window)[2]
+check(
+  second_component_column > first_component_column,
+  "mapped l moves to the next projected component"
+)
+vim.cmd("normal h")
+check(
+  vim.api.nvim_win_get_cursor(session.window)[2] == first_component_column,
+  "mapped h moves to the previous projected component"
+)
+vim.cmd("normal j")
 local moved = nveditor.context_session(session.session_id)
-check(moved.cursor_row == 2, "native j moves to the next projected field")
-vim.cmd("normal! k")
+check(moved.cursor_row == 2, "mapped j moves to the next projected field")
+check(
+  moved.cursor_column
+    == vim.api.nvim_buf_get_lines(session.bufnr, 2, 3, true)[1]:find("true", 1, true) - 1,
+  "field motion lands on the next field's editable value"
+)
+vim.cmd("normal k")
 check(
   nveditor.context_session(session.session_id).cursor_row == 1,
-  "native k moves to the previous projected field"
+  "mapped k moves to the previous projected field"
 )
 
 local updated, update_error = nveditor.update_context_session_field(
@@ -393,9 +427,13 @@ check(
 )
 vim.cmd("quit!")
 check(vim.api.nvim_get_current_tabpage() == origin_tab, ":q! returns to the source tab")
+vim.wait(100, function()
+  return vim.api.nvim_get_current_win() == origin_window
+end, 5)
+check(vim.api.nvim_get_current_win() == origin_window, ":q! restores the source window")
 check(
   vim.o.laststatus == 3,
-  "closing the context restores the user's global-statusline setting"
+  "closing the context leaves the user's global-statusline setting untouched"
 )
 vim.o.laststatus = prior_laststatus
 local cancel_event = context_events[#context_events]
