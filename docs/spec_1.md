@@ -62,7 +62,7 @@ Normal code iteration must support:
 
 ```text
 edit C/C++ in Neovim
--> F6
+-> :Kalam build reload
 -> Ninja compiles only changed translation units
 -> links a new game_module.dll
 -> editor validates and hot-reloads it
@@ -179,8 +179,8 @@ Build diagnostics should initially use Neovim's quickfix list.
 
 Transient UI is allowed:
 
-- F4 contextual popup;
-- Shift+F4 generated full-document GUI;
+- `:Kalam edit context` contextual popup;
+- `:Kalam edit form` generated full-document GUI;
 - temporary build-status notification;
 - file dialog;
 - modal error dialog for unrecoverable editor failures.
@@ -243,7 +243,7 @@ asset_cooker.exe
 
 ## 3.1 Normal iteration target
 
-The editor's F6 command must build only:
+The editor's `:Kalam build reload` action must build only:
 
 ```text
 game_module.dll
@@ -620,42 +620,46 @@ Add one explicit signal or callback when the rendered cursor rectangle changes.
 
 Do not infer it through fragile polling if Neovim-Qt already has the data.
 
-## 5.4 F4 command
+## 5.4 Contextual edit action
 
-F4 opens a contextual editor for the supported JSON field at or near the cursor.
+`:Kalam edit context` opens a contextual editor for the supported JSON field at
+or near the cursor.
 
-F4 may be implemented either as:
+The bundled Neovim command owns this action and notifies the GUI. Qt must not
+claim a competing global shortcut.
 
-- a Qt shortcut that queries Neovim state; or
-- a bundled Neovim command that notifies the GUI.
+The action remains remappable and must not claim a default key.
 
-The implementation must remain remappable.
-
-Provide a Neovim command:
-
-```vim
-:NvEditContext
-```
-
-Default mapping:
+Provide the canonical Neovim command:
 
 ```vim
-F4 -> :NvEditContext
+:Kalam edit context
 ```
+
+Expose a public mapping target for user configuration:
+
+```vim
+<Plug>(KalamEditContext) -> :Kalam edit context
+```
+
+`:NvEditContext` remains available only as a compatibility alias.
 
 ## 5.5 Full generated GUI command
 
-Provide:
+Provide the canonical command:
 
 ```vim
-:NvEditForm
+:Kalam edit form
 ```
 
-Default mapping:
+Expose a public mapping target for user configuration:
 
 ```vim
-Shift-F4 -> :NvEditForm
+<Plug>(KalamEditForm) -> :Kalam edit form
 ```
+
+No default key mapping is installed. `:NvEditForm` remains available only as a
+compatibility alias.
 
 This generates a temporary Qt form for the active valid JSON buffer.
 
@@ -1156,19 +1160,22 @@ The term is:
 
 Use Ninja as the normal build executor.
 
-## 8.1 F6 behavior
+## 8.1 Build-and-reload behavior
 
-Provide:
-
-```vim
-:NvBuildReload
-```
-
-Default mapping:
+Provide the canonical command:
 
 ```vim
-F6 -> :NvBuildReload
+:Kalam build reload
 ```
+
+Expose a public mapping target for user configuration:
+
+```vim
+<Plug>(KalamBuildReload) -> :Kalam build reload
+```
+
+No default key mapping is installed. `:NvBuildReload` remains available only as
+a compatibility alias.
 
 The editor uses `QProcess` to run:
 
@@ -1226,7 +1233,8 @@ Additionally:
 
 Capture stdout and stderr asynchronously through `QProcess`.
 
-Allow only one module build process at a time. If F6 is pressed during a build,
+Allow only one module build process at a time. If another build-and-reload
+action is requested during a build,
 mark one newer build request pending rather than launching parallel linkers.
 
 Assign a monotonically increasing build generation. Only the newest successful
@@ -1302,7 +1310,7 @@ requires a future multi-process architecture and is outside this revision.
 
 ## 9.3 Lazy work
 
-Only generate a full GUI when the user invokes `:NvEditForm`.
+Only generate a full GUI when the user invokes `:Kalam edit form`.
 
 Only parse the active JSON buffer and any directly required source-link index.
 
@@ -1509,7 +1517,7 @@ Document and object IDs are never:
 
 ---
 
-# 11. Contextual F4 Transactions
+# 11. Contextual Edit Transactions
 
 ## 11.1 Supported controls
 
@@ -1610,14 +1618,10 @@ The form is not saved.
 ## 12.2 Invocation
 
 ```vim
-:NvEditForm
+:Kalam edit form
 ```
 
-Default:
-
-```vim
-Shift-F4
-```
+No default key is assigned; users may map `<Plug>(KalamEditForm)`.
 
 ## 12.3 Presentation
 
@@ -1884,7 +1888,7 @@ Persistent field lookup is always the pair `(schema_id, field_id)`.
 
 The authoring schema should eventually drive:
 
-- F4 widget selection;
+- contextual widget selection;
 - full-form generation;
 - validation;
 - numeric ranges;
@@ -1974,7 +1978,7 @@ Generated runtime objects without authored identity remain runtime-only and do n
 
 ## 14.3 Gizmo transaction
 
-Viewport gizmos use the same transaction model as F4 controls:
+Viewport gizmos use the same transaction model as contextual controls:
 
 ```text
 mouse down on gizmo
@@ -2435,7 +2439,7 @@ Deliver:
 - candidate API/create/schema/apply failure leaves the old module running;
 - module-created GPU resources are released before unload.
 
-## Milestone 5 - Incremental build and F6 reload
+## Milestone 5 - Incremental build and reload
 
 Deliver:
 
@@ -2444,7 +2448,7 @@ Deliver:
 - module relinks;
 - quickfix receives compiler errors;
 - successful build reloads the module;
-- rapid F6 requests coalesce and stale build generations cannot reload;
+- rapid build-and-reload requests coalesce and stale generations cannot reload;
 - editor and Neovim stay alive.
 
 ## Milestone 6 - Fixed JSON scene application
@@ -2458,7 +2462,7 @@ Deliver:
 - apply to module;
 - cube color/TRS reflect JSON.
 
-## Milestone 7 - Contextual F4 Qt controls
+## Milestone 7 - Contextual Qt controls
 
 Deliver:
 
@@ -2478,7 +2482,8 @@ Deliver:
 - generated output is deterministic and remains in the build tree;
 - descriptors for scene and post-process schemas compile into the module;
 - editor enumerates and deep-copies every schema;
-- F4 dispatch uses descriptors rather than hard-coded cube switches where practical;
+- contextual-edit dispatch uses descriptors rather than hard-coded cube
+  switches where practical;
 - descriptors refresh after hot reload.
 
 ## Milestone 9 - Full generated post-process form
@@ -2486,7 +2491,7 @@ Deliver:
 Deliver:
 
 - open `examples/post_process.json`;
-- Shift-F4 opens temporary generated form;
+- `:Kalam edit form` opens a temporary generated form;
 - fields generated from schema;
 - GUI and text stay synchronized;
 - direct runtime preview;
@@ -2513,14 +2518,19 @@ The upgraded prototype is accepted when:
 3. Neovim accepts normal keyboard and mouse editing in the left region.
 4. The right region contains only the live D3D11 cube viewport.
 5. Editing valid cube JSON updates runtime after debounce.
-6. F4 on `color`, `translation`, `rotation_degrees`, `scale`, `transform`, and `cube` opens the correct Qt control.
+6. Running `:Kalam edit context` on `color`, `translation`,
+   `rotation_degrees`, `scale`, `transform`, and `cube` opens the correct Qt
+   control.
 7. Dragging controls updates runtime memory and the viewport immediately without rewriting JSON every frame.
 8. Accepting patches only the intended JSON node through Neovim RPC.
 9. Escape cancels and restores the original runtime value.
 10. `u` in Neovim restores the prior text and the viewport follows the restored document.
-11. Editing one C/C++ translation unit and pressing F6 compiles only the required object files, relinks the module, and hot-reloads it.
+11. Editing one C/C++ translation unit and running `:Kalam build reload`
+    compiles only the required object files, relinks the module, and hot-reloads
+    it.
 12. A failed compile leaves the previous module running and populates Neovim quickfix.
-13. Shift-F4 on `post_process.json` creates a complete temporary generated Qt form.
+13. Running `:Kalam edit form` in `post_process.json` creates a complete
+    temporary generated Qt form.
 14. The generated form is derived entirely from the current buffer and schema and is not saved to disk.
 15. Closing the editor explicitly releases the game module, D3D11 resources, Neovim connection, and Qt-owned widgets.
 16. `game.exe` and `game_module.dll` have no Qt dependency.
@@ -2528,7 +2538,8 @@ The upgraded prototype is accepted when:
 18. A no-op Ninja build performs no work and leaves the source tree unchanged.
 19. Injected candidate API, create, schema, and document-apply failures each
     leave the previous cube module rendering.
-20. Rapid repeated F6 requests never allow an older build generation to replace
+20. Rapid repeated build-and-reload requests never allow an older generation to
+    replace
     a newer successful module.
 21. `game.exe` loads the same module ABI and fixed-step scheduler without Qt or
     Neovim.

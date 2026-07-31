@@ -26,6 +26,7 @@ public:
     void refresh(
         const Document_Handle& document,
         const QVector<Author_Value_Owned>& values);
+    void focus_first_control();
 
 signals:
     void fieldPreviewRequested(

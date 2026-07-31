@@ -642,6 +642,19 @@ function(kalam_stage_neovim_runtime application_target)
         kalam_neovim_qt
         KALAM_NEOVIM_QT_PROJECT_RUNTIME_DIR
     )
+    file(
+        GLOB_RECURSE
+        runtime_dependencies
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${upstream_runtime}/*"
+        "${project_runtime}/*"
+    )
+    set_property(
+        TARGET "${application_target}"
+        APPEND
+        PROPERTY LINK_DEPENDS "${runtime_dependencies}"
+    )
     set(runtime_output "$<TARGET_FILE_DIR:${application_target}>/nvim-runtime")
     add_custom_command(
         TARGET "${application_target}"

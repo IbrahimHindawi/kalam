@@ -8,6 +8,8 @@
 namespace Kalam::Editor
 {
 
+class Neovim_Theme_Bridge;
+
 /*
  * A deliberately tiny Neovim-Qt adaptation. The upstream Shell remains a
  * reusable QWidget; this subclass exposes cursor geometry already known by
@@ -35,6 +37,7 @@ protected:
 
 private:
     qint64 active_grid_ = 1;
+    Neovim_Theme_Bridge* theme_bridge_ = nullptr;
 
     void publish_cursor_geometry();
 };

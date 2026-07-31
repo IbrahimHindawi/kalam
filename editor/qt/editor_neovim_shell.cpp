@@ -1,5 +1,7 @@
 #include "editor_neovim_shell.h"
 
+#include "neovim_theme_bridge.h"
+
 #include <QMoveEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -15,6 +17,8 @@ Editor_Neovim_Shell::Editor_Neovim_Shell(
     QWidget* parent)
     : NeovimQt::Shell(connector, parent)
 {
+    theme_bridge_ = new Neovim_Theme_Bridge(connector, this);
+
     connect(
         connector,
         &NeovimQt::NeovimConnector::ready,

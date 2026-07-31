@@ -1,17 +1,107 @@
 #include "qt_value_widgets.h"
 
+#include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace Kalam::Editor
 {
+
+namespace
+{
+
+struct Json_Cursor_Token
+{
+    qsizetype start = 0;
+    qsizetype length = 0;
+};
+
+bool is_json_space(char value)
+{
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+}
+
+bool is_number_byte(char value)
+{
+    return (value >= '0' && value <= '9') ||
+        value == '-' || value == '+' || value == '.' ||
+        value == 'e' || value == 'E';
+}
+
+QVector<Json_Cursor_Token> json_cursor_tokens(const QByteArray& json)
+{
+    QVector<Json_Cursor_Token> result;
+    qsizetype index = 0;
+    while (index < json.size())
+    {
+        const char value = json.at(index);
+        if (value == '"')
+        {
+            const qsizetype start = index++;
+            while (index < json.size())
+            {
+                if (json.at(index) == '\\' && index + 1 < json.size())
+                {
+                    index += 2;
+                    continue;
+                }
+                if (json.at(index++) == '"')
+                    break;
+            }
+            qsizetype after = index;
+            while (after < json.size() && is_json_space(json.at(after)))
+                ++after;
+            if (after >= json.size() || json.at(after) != ':')
+                result.push_back({start, index - start});
+            continue;
+        }
+        if ((value >= '0' && value <= '9') || value == '-')
+        {
+            const qsizetype start = index++;
+            while (index < json.size() && is_number_byte(json.at(index)))
+                ++index;
+            result.push_back({start, index - start});
+            continue;
+        }
+        qsizetype literal_length = 0;
+        if (json.mid(index, 4) == QByteArrayLiteral("true") ||
+            json.mid(index, 4) == QByteArrayLiteral("null"))
+        {
+            literal_length = 4;
+        }
+        else if (json.mid(index, 5) == QByteArrayLiteral("false"))
+        {
+            literal_length = 5;
+        }
+        if (literal_length > 0)
+        {
+            result.push_back({index, literal_length});
+            index += literal_length;
+            continue;
+        }
+        ++index;
+    }
+    return result;
+}
+
+QString cursor_fragment_html(const QString& fragment)
+{
+    QString result = fragment.toHtmlEscaped();
+    result.replace(QLatin1Char(' '), QStringLiteral("&nbsp;"));
+    result.replace(QLatin1Char('\t'), QStringLiteral("&nbsp;&nbsp;&nbsp;&nbsp;"));
+    return result;
+}
+
+} // namespace
 
 Author_Value_Widget::Author_Value_Widget(
     const Field_Descriptor& field,
@@ -141,6 +231,9 @@ void Author_Value_Widget::set_value(const Author_Value_Owned& new_value)
     if (checkbox_ != nullptr)
     {
         checkbox_->setChecked(new_value.boolean);
+        checkbox_->setText(
+            new_value.boolean
+                ? QStringLiteral("true") : QStringLiteral("false"));
     }
     else if (integer_spin_ != nullptr)
     {
@@ -173,6 +266,230 @@ void Author_Value_Widget::set_value(const Author_Value_Owned& new_value)
         }
     }
     updating_ = false;
+}
+
+void Author_Value_Widget::set_keyboard_passive(bool passive)
+{
+    const Qt::FocusPolicy policy = passive
+        ? Qt::NoFocus
+        : Qt::StrongFocus;
+    setFocusPolicy(policy);
+    const QList<QWidget*> controls = findChildren<QWidget*>();
+    for (QWidget* control : controls)
+    {
+        control->setFocusPolicy(policy);
+    }
+}
+
+void Author_Value_Widget::set_projected_cursor(
+    bool active,
+    const QByteArray& value_json,
+    qint64 byte_column,
+    const QByteArray& mode)
+{
+    clear_projected_cursor();
+    if (!active)
+        return;
+
+    QVector<Json_Cursor_Token> tokens = json_cursor_tokens(value_json);
+    if (tokens.isEmpty())
+        tokens.push_back({0, value_json.size()});
+
+    qsizetype token_index = 0;
+    qint64 best_distance = -1;
+    for (qsizetype index = 0; index < tokens.size(); ++index)
+    {
+        const Json_Cursor_Token& candidate = tokens.at(index);
+        const qint64 start = candidate.start;
+        const qint64 end = candidate.start + candidate.length;
+        qint64 distance = 0;
+        if (byte_column < start)
+            distance = start - byte_column;
+        else if (byte_column > end)
+            distance = byte_column - end;
+        if (best_distance < 0 || distance < best_distance)
+        {
+            token_index = index;
+            best_distance = distance;
+        }
+    }
+
+    QWidget* control = nullptr;
+    int component = 0;
+    if (!numeric_spins_.isEmpty())
+    {
+        component = static_cast<int>(qBound<qsizetype>(
+            0, token_index, numeric_spins_.size() - 1));
+        control = numeric_spins_.at(component);
+    }
+    else if (integer_spin_ != nullptr)
+    {
+        control = integer_spin_;
+    }
+    else if (line_edit_ != nullptr)
+    {
+        control = line_edit_;
+    }
+    else if (checkbox_ != nullptr)
+    {
+        control = checkbox_;
+    }
+    if (control == nullptr)
+        return;
+
+    const Json_Cursor_Token& token = tokens.at(token_index);
+    const QByteArray token_utf8 = value_json.mid(token.start, token.length);
+    const qint64 relative_byte_64 = qBound<qint64>(
+        0,
+        byte_column - token.start,
+        static_cast<qint64>(token_utf8.size()));
+    const qsizetype relative_byte = static_cast<qsizetype>(relative_byte_64);
+    const QString token_text = QString::fromUtf8(token_utf8);
+    const qsizetype character_index = QString::fromUtf8(
+        token_utf8.constData(),
+        relative_byte).size();
+    const QString before = cursor_fragment_html(
+        token_text.left(character_index));
+    const QString cursor = cursor_fragment_html(
+        character_index < token_text.size()
+            ? token_text.mid(character_index, 1)
+            : QStringLiteral(" "));
+    const QString after = cursor_fragment_html(
+        token_text.mid(character_index +
+            (character_index < token_text.size() ? 1 : 0)));
+
+    QWidget* target = control;
+    if (auto* spin = qobject_cast<QAbstractSpinBox*>(control))
+    {
+        if (QLineEdit* spin_line_edit = spin->findChild<QLineEdit*>())
+            target = spin_line_edit;
+    }
+    if (projected_cursor_ == nullptr)
+    {
+        projected_cursor_ = new QLabel(target);
+        projected_cursor_->setObjectName(
+            QStringLiteral("kalamProjectedCursor"));
+        projected_cursor_->setTextFormat(Qt::RichText);
+        projected_cursor_->setTextInteractionFlags(Qt::NoTextInteraction);
+        projected_cursor_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        projected_cursor_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    else
+    {
+        projected_cursor_->setParent(target);
+    }
+
+    projected_cursor_control_ = control;
+    projected_cursor_target_ = target;
+    projected_cursor_target_->installEventFilter(this);
+    projected_cursor_control_->setProperty("kalamProjectedCursor", true);
+    projected_cursor_->setProperty(
+        "kalamInsertCursor",
+        mode.startsWith('i'));
+    setProperty("kalamCursorComponent", component);
+    setProperty("kalamCursorToken", token_utf8);
+
+    projected_cursor_->setFont(target->font());
+    projected_cursor_->setPalette(target->palette());
+    const QString background =
+        target->palette().color(QPalette::Highlight).name();
+    const QString foreground =
+        target->palette().color(QPalette::HighlightedText).name();
+    projected_cursor_->setText(QStringLiteral(
+        "<pre style='margin:0'>%1<span style='background:%2;color:%3'>"
+        "%4</span>%5</pre>")
+        .arg(before, background, foreground, cursor, after));
+
+    projected_cursor_control_->style()->unpolish(projected_cursor_control_);
+    projected_cursor_control_->style()->polish(projected_cursor_control_);
+    projected_cursor_control_->update();
+    position_projected_cursor();
+    projected_cursor_->show();
+    projected_cursor_->raise();
+}
+
+bool Author_Value_Widget::has_projected_cursor() const
+{
+    return projected_cursor_ != nullptr && !projected_cursor_->isHidden();
+}
+
+bool Author_Value_Widget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == projected_cursor_target_ &&
+        (event->type() == QEvent::Resize ||
+         event->type() == QEvent::Show ||
+         event->type() == QEvent::LayoutRequest ||
+         event->type() == QEvent::StyleChange))
+    {
+        position_projected_cursor();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void Author_Value_Widget::clear_projected_cursor()
+{
+    if (projected_cursor_ != nullptr)
+        projected_cursor_->hide();
+    if (projected_cursor_target_ != nullptr)
+        projected_cursor_target_->removeEventFilter(this);
+    if (projected_cursor_control_ != nullptr)
+    {
+        projected_cursor_control_->setProperty("kalamProjectedCursor", false);
+        projected_cursor_control_->style()->unpolish(projected_cursor_control_);
+        projected_cursor_control_->style()->polish(projected_cursor_control_);
+        projected_cursor_control_->update();
+    }
+    projected_cursor_control_ = nullptr;
+    projected_cursor_target_ = nullptr;
+    setProperty("kalamCursorComponent", -1);
+    setProperty("kalamCursorToken", QByteArray());
+}
+
+void Author_Value_Widget::position_projected_cursor()
+{
+    if (projected_cursor_ == nullptr || projected_cursor_target_ == nullptr)
+        return;
+    QRect area = projected_cursor_target_->rect();
+    if (projected_cursor_control_ == checkbox_)
+    {
+        const int left = qMin(20, qMax(0, area.width() - 1));
+        area.setLeft(left);
+    }
+    else
+    {
+        area.adjust(2, 1, -2, -1);
+    }
+    projected_cursor_->setGeometry(area);
+}
+
+void Author_Value_Widget::focus_first_control()
+{
+    QWidget* target = nullptr;
+    if (checkbox_ != nullptr)
+    {
+        target = checkbox_;
+    }
+    else if (integer_spin_ != nullptr)
+    {
+        target = integer_spin_;
+    }
+    else if (line_edit_ != nullptr)
+    {
+        target = line_edit_;
+    }
+    else if (!numeric_spins_.isEmpty())
+    {
+        target = numeric_spins_.first();
+    }
+    else if (color_button_ != nullptr)
+    {
+        target = color_button_;
+    }
+
+    if (target != nullptr)
+    {
+        target->setFocus(Qt::TabFocusReason);
+    }
 }
 
 void Author_Value_Widget::build_numeric_editor()

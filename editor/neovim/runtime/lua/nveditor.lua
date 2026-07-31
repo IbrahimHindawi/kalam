@@ -941,34 +941,738 @@ local function rpc_notify(method, payload)
   return false
 end
 
-function M.edit_context()
-  local context, context_error = M.cursor_context()
-  if not context then
-    vim.notify(context_error, vim.log.levels.WARN)
-    return
-  end
-  rpc_notify("nveditor.context_edit", context)
+local context_sessions = {}
+local context_session_by_buffer = {}
+local next_context_session_id = 1
+
+local function context_field_line(session, index, value_json)
+  local suffix = index < #session.fields and "," or ""
+  return "  " .. vim.json.encode(session.fields[index].name)
+    .. ": " .. value_json .. suffix
 end
 
-function M.edit_form()
-  local document = M.validate_buffer()
-  if not document.ok then
-    vim.notify("active JSON buffer is invalid", vim.log.levels.WARN)
-    return
+local function context_session_lines(session)
+  local lines = { "{" }
+  for index, field in ipairs(session.fields) do
+    table.insert(lines, context_field_line(session, index, field.value_json))
   end
-  document.decoded = nil
-  rpc_notify("nveditor.form_edit", document)
+  table.insert(lines, "}")
+  return lines
 end
 
-function M.build_reload()
-  rpc_notify("nveditor.build_reload", {
-    requested_at = vim.uv.hrtime(),
+local function context_window_geometry(window)
+  if not window or not vim.api.nvim_win_is_valid(window) then
+    return 0, 0, 0, 0
+  end
+  local position = vim.api.nvim_win_get_position(window)
+  return position[1], position[2], vim.api.nvim_win_get_width(window),
+    vim.api.nvim_win_get_height(window)
+end
+
+local function context_session_payload(session)
+  local row, column, width, height = context_window_geometry(session.window)
+  local cursor = { 1, 0 }
+  if session.window and vim.api.nvim_win_is_valid(session.window) then
+    cursor = vim.api.nvim_win_get_cursor(session.window)
+  end
+  local modified = false
+  local changedtick = 0
+  local text = ""
+  if session.buffer and vim.api.nvim_buf_is_valid(session.buffer) then
+    modified = vim.bo[session.buffer].modified
+    changedtick = vim.api.nvim_buf_get_changedtick(session.buffer)
+    text = text_view(session.buffer)
+  end
+  return {
+    session_id = session.id,
+    bufnr = session.buffer,
+    window = session.window,
+    changedtick = changedtick,
+    text = text,
+    mode = vim.api.nvim_get_mode().mode,
+    cursor_row = cursor[1] - 1,
+    cursor_column = cursor[2],
+    window_row = row,
+    window_column = column,
+    window_width = width,
+    window_height = height,
+    modified = modified,
+    write_pending = session.write_pending == true,
+    json_path = session.json_path,
+    source_buffer = session.source_buffer,
+  }
+end
+
+local function apply_context_statusline(session)
+  if session.window and vim.api.nvim_win_is_valid(session.window) then
+    vim.o.laststatus = 2
+    vim.wo[session.window].statusline = session.statusline
+  end
+end
+
+local function publish_context_session(session)
+  if context_sessions[session.id] ~= session
+      or not vim.api.nvim_buf_is_valid(session.buffer) then
+    return
+  end
+  rpc_notify("nveditor.context_session_changed", context_session_payload(session))
+end
+
+local function validate_context_session(session)
+  local validation = M.validate_text(text_view(session.buffer))
+  if not validation.ok then
+    local diagnostic = validation.diagnostics[1] or {}
+    return nil, diagnostic.message or "invalid context JSON"
+  end
+  if type(validation.decoded) ~= "table" then
+    return nil, "the context buffer must contain a JSON object"
+  end
+
+  local expected = {}
+  for _, field in ipairs(session.fields) do
+    expected[field.name] = true
+    if validation.decoded[field.name] == nil then
+      return nil, "missing context field: " .. field.name
+    end
+  end
+  for name, _ in pairs(validation.decoded) do
+    if type(name) ~= "string" or not expected[name] then
+      return nil, "unexpected context field: " .. tostring(name)
+    end
+  end
+  return validation.decoded
+end
+
+local function begin_context_session_write(session)
+  if context_sessions[session.id] ~= session
+      or not vim.api.nvim_buf_is_valid(session.buffer) then
+    return nil, "context session is no longer open"
+  end
+  if session.write_pending then
+    return nil, "context write is already in progress"
+  end
+
+  local _, validation_error = validate_context_session(session)
+  if validation_error then
+    return nil, validation_error
+  end
+
+  session.write_pending = true
+  vim.bo[session.buffer].modified = false
+  vim.bo[session.buffer].modifiable = false
+  rpc_notify(
+    "nveditor.context_session_write",
+    context_session_payload(session)
+  )
+  vim.schedule(function()
+    publish_context_session(session)
+  end)
+  return true
+end
+
+local function forget_context_session(session)
+  if context_sessions[session.id] ~= session then
+    return
+  end
+  context_sessions[session.id] = nil
+  context_session_by_buffer[session.buffer] = nil
+  if next(context_sessions) == nil then
+    if session.paused_lualine and type(session.lualine) == "table"
+        and type(session.lualine.hide) == "function" then
+      pcall(session.lualine.hide, {
+        place = { "statusline" },
+        unhide = true,
+      })
+    end
+    if session.old_laststatus ~= nil then
+      vim.o.laststatus = session.old_laststatus
+    end
+  end
+  rpc_notify("nveditor.context_session_closed", {
+    session_id = session.id,
+    bufnr = session.buffer,
+    write_pending = session.write_pending == true,
+    json_path = session.json_path,
+    source_buffer = session.source_buffer,
   })
 end
 
+function M.open_context_session(spec)
+  if type(spec) ~= "table" or type(spec.fields) ~= "table"
+      or #spec.fields == 0 then
+    return nil, "context session requires at least one field"
+  end
+
+  local fields = {}
+  local seen = {}
+  for index, field in ipairs(spec.fields) do
+    if type(field) ~= "table" or type(field.name) ~= "string"
+        or field.name == "" or type(field.value_json) ~= "string" then
+      return nil, "invalid context field at index " .. index
+    end
+    if seen[field.name] then
+      return nil, "duplicate context field: " .. field.name
+    end
+    local ok = pcall(vim.json.decode, field.value_json)
+    if not ok then
+      return nil, "invalid JSON value for context field: " .. field.name
+    end
+    seen[field.name] = true
+    table.insert(fields, {
+      name = field.name,
+      value_json = field.value_json,
+    })
+  end
+
+  local origin_window = vim.api.nvim_get_current_win()
+  local origin_tab = vim.api.nvim_get_current_tabpage()
+  local old_laststatus = vim.o.laststatus
+  local lualine = package.loaded.lualine
+  local paused_lualine = false
+  if type(lualine) == "table" and type(lualine.hide) == "function" then
+    paused_lualine = pcall(lualine.hide, {
+      place = { "statusline" },
+      unhide = false,
+    })
+  end
+  vim.cmd("tabnew")
+  local window = vim.api.nvim_get_current_win()
+  local tabpage = vim.api.nvim_get_current_tabpage()
+  local buffer = vim.api.nvim_get_current_buf()
+  local session_id = next_context_session_id
+  next_context_session_id = next_context_session_id + 1
+  local session = {
+    id = session_id,
+    buffer = buffer,
+    window = window,
+    tabpage = tabpage,
+    origin_window = origin_window,
+    origin_tab = origin_tab,
+    source_buffer = tonumber(spec.source_buffer) or 0,
+    json_path = tostring(spec.json_path or "$"),
+    fields = fields,
+    write_pending = false,
+    old_laststatus = old_laststatus,
+    paused_lualine = paused_lualine,
+    lualine = lualine,
+  }
+  context_sessions[session_id] = session
+  context_session_by_buffer[buffer] = session
+
+  vim.api.nvim_buf_set_name(
+    buffer,
+    string.format("kalam://context/%d", session_id)
+  )
+  vim.bo[buffer].buftype = "acwrite"
+  vim.bo[buffer].bufhidden = "wipe"
+  vim.bo[buffer].buflisted = false
+  vim.bo[buffer].swapfile = false
+  vim.bo[buffer].filetype = "json"
+  vim.bo[buffer].modifiable = true
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, true, context_session_lines(session))
+  vim.bo[buffer].modified = false
+  -- Treat the generated staging document like file-loaded text. This closes
+  -- its seed undo block so the first keyboard or mouse edit is independently
+  -- undoable instead of undoing the entire generated buffer.
+  vim.api.nvim_buf_call(buffer, function()
+    vim.cmd("silent undo")
+    vim.cmd("silent redo")
+  end)
+  vim.bo[buffer].modified = false
+
+  local status_path = session.json_path:gsub("%%", "%%%%")
+  session.statusline = table.concat({
+    "%#StatusLine# Kalam context: ",
+    status_path,
+    " %m %= :w apply  :q cancel  :q! discard  :wq apply+close ",
+  })
+  apply_context_statusline(session)
+  if #fields > 0 then
+    vim.api.nvim_win_set_cursor(window, { 2, 0 })
+  end
+  vim.cmd("stopinsert")
+
+  local group = vim.api.nvim_create_augroup(
+    "KalamContextSession" .. session_id,
+    { clear = true }
+  )
+  vim.api.nvim_create_autocmd(
+    { "TextChanged", "TextChangedI", "CursorMoved", "CursorMovedI", "ModeChanged", "BufEnter", "WinEnter" },
+    {
+      group = group,
+      buffer = buffer,
+      callback = function()
+        apply_context_statusline(session)
+        vim.schedule(function()
+          publish_context_session(session)
+        end)
+      end,
+    }
+  )
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
+    buffer = buffer,
+    callback = function()
+      local ok, write_error = begin_context_session_write(session)
+      if not ok then
+        error("Kalam context: " .. write_error, 0)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = group,
+    buffer = buffer,
+    once = true,
+    callback = function()
+      forget_context_session(session)
+    end,
+  })
+
+  vim.schedule(function()
+    publish_context_session(session)
+  end)
+  return context_session_payload(session)
+end
+
+function M.context_session(session_id)
+  local session = context_sessions[tonumber(session_id)]
+  if not session then
+    return nil, "context session is not open"
+  end
+  return context_session_payload(session)
+end
+
+function M.update_context_session_field(session_id, name, value_json)
+  local session = context_sessions[tonumber(session_id)]
+  if not session or not vim.api.nvim_buf_is_valid(session.buffer) then
+    return nil, "context session is not open"
+  end
+  if session.write_pending then
+    return nil, "context write is in progress"
+  end
+  if type(name) ~= "string" or type(value_json) ~= "string" then
+    return nil, "invalid context field update"
+  end
+  local ok = pcall(vim.json.decode, value_json)
+  if not ok then
+    return nil, "context field update is not valid JSON"
+  end
+
+  local field_index = nil
+  for index, field in ipairs(session.fields) do
+    if field.name == name then
+      field_index = index
+      break
+    end
+  end
+  if not field_index then
+    return nil, "context field does not exist: " .. name
+  end
+
+  local field = session.fields[field_index]
+  field.value_json = value_json
+  vim.api.nvim_buf_set_lines(
+    session.buffer,
+    field_index,
+    field_index + 1,
+    true,
+    { context_field_line(session, field_index, value_json) }
+  )
+  if vim.api.nvim_win_is_valid(session.window) then
+    vim.api.nvim_set_current_win(session.window)
+    local prefix = "  " .. vim.json.encode(name) .. ": "
+    vim.api.nvim_win_set_cursor(
+      session.window,
+      { field_index + 1, #prefix }
+    )
+  end
+  publish_context_session(session)
+  return context_session_payload(session)
+end
+
+function M.finish_context_session_write(session_id, succeeded, message)
+  local session = context_sessions[tonumber(session_id)]
+  if not session then
+    return true
+  end
+  if not vim.api.nvim_buf_is_valid(session.buffer) then
+    forget_context_session(session)
+    return true
+  end
+
+  vim.bo[session.buffer].modifiable = true
+  session.write_pending = false
+  vim.bo[session.buffer].modified = not succeeded
+  if message and message ~= "" then
+    vim.notify(
+      message,
+      succeeded and vim.log.levels.INFO or vim.log.levels.ERROR
+    )
+  elseif succeeded then
+    vim.notify("Kalam context applied", vim.log.levels.INFO)
+  end
+  publish_context_session(session)
+  return true
+end
+
+function M.request_context_session_write(session_id, close_after_write)
+  local session = context_sessions[tonumber(session_id)]
+  if not session then
+    return nil, "context session is not open"
+  end
+  local ok, write_error = begin_context_session_write(session)
+  if not ok then
+    return nil, write_error
+  end
+  if close_after_write then
+    vim.schedule(function()
+      if context_sessions[session.id] == session
+          and vim.api.nvim_win_is_valid(session.window) then
+        vim.api.nvim_win_close(session.window, true)
+      end
+    end)
+  end
+  return true
+end
+
+function M.close_context_session(session_id, force)
+  local session = context_sessions[tonumber(session_id)]
+  if not session then
+    return true
+  end
+  if vim.api.nvim_win_is_valid(session.window) then
+    local ok, close_error = pcall(
+      vim.api.nvim_win_close,
+      session.window,
+      force == true
+    )
+    if not ok then
+      return nil, tostring(close_error)
+    end
+  elseif vim.api.nvim_buf_is_valid(session.buffer) then
+    local ok, close_error = pcall(
+      vim.api.nvim_buf_delete,
+      session.buffer,
+      { force = force == true }
+    )
+    if not ok then
+      return nil, tostring(close_error)
+    end
+  else
+    forget_context_session(session)
+  end
+  return true
+end
+
+-- Public Kalam actions use these identifiers everywhere inside the runtime.
+-- Their command spelling and their RPC notification are deliberately kept
+-- separate: the spelling is user-facing, while the action id remains stable
+-- for mappings, Lua configuration, and other Kalam affordances.
+local action_order = {
+  "edit.context",
+  "edit.form",
+  "build.reload",
+  "focus.editor",
+  "focus.viewport",
+  "toggle.viewport",
+  "play",
+  "stop",
+}
+
+local action_registry = {
+  ["edit.context"] = {
+    words = { "edit", "context" },
+    description = "Edit the authored JSON field at the cursor",
+    notification = "nveditor.context_edit",
+  },
+  ["edit.form"] = {
+    words = { "edit", "form" },
+    description = "Open a generated form for the active authored JSON document",
+    notification = "nveditor.form_edit",
+  },
+  ["build.reload"] = {
+    words = { "build", "reload" },
+    description = "Build and hot-reload the Kalam game module",
+    notification = "nveditor.build_reload",
+  },
+  ["focus.editor"] = {
+    words = { "focus", "editor" },
+    description = "Move keyboard focus to the Neovim editor",
+    notification = "nveditor.focus_editor",
+  },
+  ["focus.viewport"] = {
+    words = { "focus", "viewport" },
+    description = "Move keyboard focus to the game viewport",
+    notification = "nveditor.focus_viewport",
+  },
+  ["toggle.viewport"] = {
+    words = { "toggle", "viewport" },
+    description = "Show or hide the game viewport",
+    notification = "nveditor.toggle_viewport",
+  },
+  ["play"] = {
+    words = { "play" },
+    description = "Enter viewport navigation capture",
+    notification = "nveditor.play",
+  },
+  ["stop"] = {
+    words = { "stop" },
+    description = "Leave viewport navigation capture and return to Neovim",
+    notification = "nveditor.stop",
+  },
+}
+
+local action_by_command = {}
+for _, action_id in ipairs(action_order) do
+  local action = action_registry[action_id]
+  action_by_command[table.concat(action.words, " ")] = action_id
+end
+
+local plug_mappings = {
+  ["edit.context"] = "<Plug>(KalamEditContext)",
+  ["edit.form"] = "<Plug>(KalamEditForm)",
+  ["build.reload"] = "<Plug>(KalamBuildReload)",
+  ["focus.editor"] = "<Plug>(KalamFocusEditor)",
+  ["focus.viewport"] = "<Plug>(KalamFocusViewport)",
+  ["toggle.viewport"] = "<Plug>(KalamToggleViewport)",
+  ["play"] = "<Plug>(KalamPlay)",
+  ["stop"] = "<Plug>(KalamStop)",
+}
+
+local function action_syntax(action)
+  return table.concat(action.words, " ")
+end
+
+local function action_payload(action_id, payload)
+  payload = payload or {}
+  payload.action = action_id
+  return payload
+end
+
+local function focus_payload(action_id)
+  local window = vim.api.nvim_get_current_win()
+  return action_payload(action_id, {
+    requested_at = vim.uv.hrtime(),
+    window = window,
+    buffer = vim.api.nvim_get_current_buf(),
+    cursor = vim.api.nvim_win_get_cursor(window),
+  })
+end
+
+local function dispatch_edit_context(action_id, action)
+  local context, context_error = M.cursor_context()
+  if not context then
+    vim.notify(context_error, vim.log.levels.WARN)
+    return nil, context_error
+  end
+  rpc_notify(action.notification, action_payload(action_id, context))
+  return true
+end
+
+local function dispatch_edit_form(action_id, action)
+  local document = M.validate_buffer()
+  if not document.ok then
+    local message = "active JSON buffer is invalid"
+    vim.notify(message, vim.log.levels.WARN)
+    return nil, message
+  end
+  document.decoded = nil
+  rpc_notify(action.notification, action_payload(action_id, document))
+  return true
+end
+
+local function dispatch_build_reload(action_id, action)
+  rpc_notify(action.notification, action_payload(action_id, {
+    requested_at = vim.uv.hrtime(),
+  }))
+  return true
+end
+
+local function dispatch_focus(action_id, action)
+  rpc_notify(action.notification, focus_payload(action_id))
+  return true
+end
+
+local function dispatch_simple(action_id, action)
+  rpc_notify(action.notification, action_payload(action_id, {
+    requested_at = vim.uv.hrtime(),
+  }))
+  return true
+end
+
+action_registry["edit.context"].run = dispatch_edit_context
+action_registry["edit.form"].run = dispatch_edit_form
+action_registry["build.reload"].run = dispatch_build_reload
+action_registry["focus.editor"].run = dispatch_focus
+action_registry["focus.viewport"].run = dispatch_focus
+action_registry["toggle.viewport"].run = dispatch_simple
+action_registry.play.run = dispatch_simple
+action_registry.stop.run = dispatch_simple
+
+local function notify_help(prefix)
+  local lines = { "Kalam actions:" }
+  local found = false
+  for _, action_id in ipairs(action_order) do
+    local action = action_registry[action_id]
+    local syntax = action_syntax(action)
+    if prefix == nil or syntax:sub(1, #prefix) == prefix then
+      table.insert(lines, string.format("  :Kalam %-16s %s", syntax, action.description))
+      found = true
+    end
+  end
+
+  if not found then
+    local message = string.format(
+      "unknown Kalam operation: %s (run :Kalam for help)",
+      prefix
+    )
+    vim.notify(message, vim.log.levels.WARN)
+    return nil, message
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "No default key mappings are installed. Public <Plug> mappings:")
+  for _, action_id in ipairs(action_order) do
+    local action = action_registry[action_id]
+    local syntax = action_syntax(action)
+    if prefix == nil or syntax:sub(1, #prefix) == prefix then
+      table.insert(
+        lines,
+        string.format("  %s  -> :Kalam %s", plug_mappings[action_id], syntax)
+      )
+    end
+  end
+  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+  return true
+end
+
+function M.actions()
+  local result = {}
+  for _, action_id in ipairs(action_order) do
+    local action = action_registry[action_id]
+    table.insert(result, {
+      id = action_id,
+      command = action_syntax(action),
+      description = action.description,
+      notification = action.notification,
+      plug = plug_mappings[action_id],
+    })
+  end
+  return result
+end
+
+function M.dispatch(action_id)
+  local action = action_registry[action_id]
+  if not action then
+    local message = string.format("unknown Kalam action: %s", tostring(action_id))
+    vim.notify(message, vim.log.levels.WARN)
+    return nil, message
+  end
+  return action.run(action_id, action)
+end
+
+function M.command(arguments)
+  local words = arguments or {}
+  if #words == 0 then
+    return notify_help()
+  end
+
+  if words[1] == "help" then
+    if #words == 1 then
+      return notify_help()
+    end
+    return notify_help(table.concat(words, " ", 2))
+  end
+
+  local command = table.concat(words, " ")
+  local action_id = action_by_command[command]
+  if action_id then
+    return M.dispatch(action_id)
+  end
+
+  for _, action in pairs(action_registry) do
+    local syntax = action_syntax(action)
+    if syntax:sub(1, #command) == command then
+      return notify_help(command)
+    end
+  end
+
+  local message = string.format(
+    "unknown Kalam operation: %s (run :Kalam for help)",
+    command
+  )
+  vim.notify(message, vim.log.levels.WARN)
+  return nil, message
+end
+
+local function unique_sorted(values)
+  table.sort(values)
+  local result = {}
+  local previous = nil
+  for _, value in ipairs(values) do
+    if value ~= previous then
+      table.insert(result, value)
+      previous = value
+    end
+  end
+  return result
+end
+
+function M.complete(arglead, cmdline)
+  -- Keep the trailing space: an empty arglead after `:Kalam edit ` means
+  -- `edit` is complete and completion must offer its second word.
+  local remainder = cmdline:match("^%s*:?[A-Za-z]+%s(.*)$") or ""
+  local words = {}
+  for word in remainder:gmatch("%S+") do
+    table.insert(words, word)
+  end
+
+  local prefix = arglead or ""
+  if not remainder:match("%s$") and #words > 0 then
+    prefix = table.remove(words)
+  end
+
+  if words[1] == "help" then
+    table.remove(words, 1)
+  end
+
+  local values = {}
+  for _, action_id in ipairs(action_order) do
+    local action_words = action_registry[action_id].words
+    local matches = true
+    for index, word in ipairs(words) do
+      if action_words[index] ~= word then
+        matches = false
+        break
+      end
+    end
+    local candidate = action_words[#words + 1]
+    if matches and candidate and candidate:sub(1, #prefix) == prefix then
+      table.insert(values, candidate)
+    end
+  end
+
+  if #words == 0 and ("help"):sub(1, #prefix) == prefix then
+    table.insert(values, "help")
+  end
+  return unique_sorted(values)
+end
+-- Compatibility aliases. New mappings and documentation use :Kalam so every
+-- invocation reaches the same action dispatcher.
+function M.edit_context()
+  return M.dispatch("edit.context")
+end
+
+function M.edit_form()
+  return M.dispatch("edit.form")
+end
+
+function M.build_reload()
+  return M.dispatch("build.reload")
+end
+
 local function schedule_document_validation(bufnr)
-  if bufnr ~= vim.api.nvim_get_current_buf()
-      or vim.bo[bufnr].filetype ~= "json" then
+  if bufnr ~= vim.api.nvim_get_current_buf() then
     return
   end
 
@@ -999,34 +1703,48 @@ function M.setup()
   setup_complete = true
 
   vim.api.nvim_create_user_command(
+    "Kalam",
+    function(options)
+      M.command(options.fargs)
+    end,
+    {
+      nargs = "*",
+      complete = function(arglead, cmdline)
+        return M.complete(arglead, cmdline)
+      end,
+      desc = "Kalam Neovim-native editor actions",
+    }
+  )
+
+  vim.api.nvim_create_user_command(
     "NvEditContext",
     M.edit_context,
-    { desc = "Edit the authored JSON field at the cursor" }
+    { desc = "Compatibility alias for :Kalam edit context" }
   )
   vim.api.nvim_create_user_command(
     "NvEditForm",
     M.edit_form,
-    { desc = "Open a generated form for the active authored JSON document" }
+    { desc = "Compatibility alias for :Kalam edit form" }
   )
   vim.api.nvim_create_user_command(
     "NvBuildReload",
     M.build_reload,
-    { desc = "Build and hot-reload the Kalam game module" }
+    { desc = "Compatibility alias for :Kalam build reload" }
   )
 
-  if vim.g.nveditor_disable_default_mappings ~= 1 then
-    vim.keymap.set("n", "<F4>", "<Cmd>NvEditContext<CR>", {
-      silent = true,
-      desc = "Kalam contextual edit",
-    })
-    vim.keymap.set("n", "<S-F4>", "<Cmd>NvEditForm<CR>", {
-      silent = true,
-      desc = "Kalam generated form",
-    })
-    vim.keymap.set("n", "<F6>", "<Cmd>NvBuildReload<CR>", {
-      silent = true,
-      desc = "Kalam build and reload",
-    })
+  -- <Plug> is the only mapping surface Kalam claims. Users decide whether
+  -- these actions belong on F-keys, a leader sequence, or no key at all.
+  for _, action_id in ipairs(action_order) do
+    local action = action_registry[action_id]
+    vim.keymap.set(
+      "n",
+      plug_mappings[action_id],
+      "<Cmd>Kalam " .. action_syntax(action) .. "<CR>",
+      {
+        silent = true,
+        desc = "Kalam: " .. action.description,
+      }
+    )
   end
 
   local group = vim.api.nvim_create_augroup("KalamNvEditor", { clear = true })

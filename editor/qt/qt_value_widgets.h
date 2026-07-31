@@ -9,6 +9,8 @@
 class QCheckBox;
 class QColorDialog;
 class QDoubleSpinBox;
+class QEvent;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
@@ -29,6 +31,14 @@ public:
     const Field_Descriptor& field() const;
     Author_Value_Owned value() const;
     void set_value(const Author_Value_Owned& value);
+    void set_keyboard_passive(bool passive);
+    void set_projected_cursor(
+        bool active,
+        const QByteArray& value_json,
+        qint64 byte_column,
+        const QByteArray& mode);
+    bool has_projected_cursor() const;
+    void focus_first_control();
 
 signals:
     void previewRequested(
@@ -46,11 +56,17 @@ private:
     QLineEdit* line_edit_ = nullptr;
     QPushButton* color_button_ = nullptr;
     QColorDialog* color_dialog_ = nullptr;
+    QLabel* projected_cursor_ = nullptr;
+    QWidget* projected_cursor_control_ = nullptr;
+    QWidget* projected_cursor_target_ = nullptr;
     Author_Value_Owned color_dialog_original_;
     bool updating_ = false;
 
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void build_numeric_editor();
     void choose_color();
+    void clear_projected_cursor();
+    void position_projected_cursor();
     void publish_preview();
     void publish_commit();
     int spin_component_count() const;

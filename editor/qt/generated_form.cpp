@@ -6,7 +6,11 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QLabel>
+#include <QHBoxLayout>
+#include <QKeySequence>
 #include <QScrollArea>
+#include <QPushButton>
+#include <QShortcut>
 #include <QVBoxLayout>
 
 namespace Kalam::Editor
@@ -17,7 +21,7 @@ Generated_Form::Generated_Form(
     const Schema_Descriptor& schema,
     const QVector<Author_Value_Owned>& values,
     QWidget* parent)
-    : QDialog(parent, Qt::Tool),
+    : QDialog(parent, Qt::Tool | Qt::FramelessWindowHint),
       document_(document),
       schema_(schema),
       original_values_(values)
@@ -32,6 +36,21 @@ Generated_Form::Generated_Form(
     resize(460, 520);
 
     auto* root_layout = new QVBoxLayout(this);
+    root_layout->setContentsMargins(1, 1, 1, 1);
+    root_layout->setSpacing(0);
+    auto* title_bar = new QHBoxLayout();
+    title_bar->setContentsMargins(0, 0, 0, 0);
+    title_bar->setSpacing(0);
+    auto* title_label = new QLabel(windowTitle(), this);
+    title_label->setObjectName(QStringLiteral("kalamSurfaceTitle"));
+    title_bar->addWidget(title_label);
+    auto* close_button = new QPushButton(QStringLiteral("x"), this);
+    close_button->setObjectName(QStringLiteral("kalamSurfaceClose"));
+    close_button->setAutoDefault(false);
+    close_button->setFocusPolicy(Qt::NoFocus);
+    title_bar->addWidget(close_button);
+    root_layout->addLayout(title_bar);
+
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     auto* contents = new QWidget(scroll);
@@ -94,6 +113,18 @@ Generated_Form::Generated_Form(
     }
     scroll->setWidget(contents);
     root_layout->addWidget(scroll);
+
+    connect(close_button, &QPushButton::clicked, this, &Generated_Form::close);
+    auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    connect(escape, &QShortcut::activated, this, [this]() { close(); });
+    auto* control_bracket = new QShortcut(
+        QKeySequence(Qt::CTRL | Qt::Key_BracketLeft),
+        this);
+    connect(
+        control_bracket,
+        &QShortcut::activated,
+        this,
+        [this]() { close(); });
 }
 
 const Document_Handle& Generated_Form::document() const
@@ -115,6 +146,18 @@ void Generated_Form::refresh(
     for (qsizetype index = 0; index < editors_.size(); ++index)
     {
         editors_.at(index)->set_value(values.at(index));
+    }
+}
+
+void Generated_Form::focus_first_control()
+{
+    if (!editors_.isEmpty())
+    {
+        editors_.first()->focus_first_control();
+    }
+    else
+    {
+        setFocus(Qt::TabFocusReason);
     }
 }
 

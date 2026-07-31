@@ -192,6 +192,94 @@ void test_not_ready_completions_are_queued(
           QStringLiteral("text patch reports the not-ready failure"));
 }
 
+void test_context_session_notifications(
+    Kalam::Editor::Editor_Neovim_Adapter* adapter)
+{
+    int changed_count = 0;
+    int write_count = 0;
+    int close_count = 0;
+    Kalam::Editor::Context_Session_State changed_state;
+    Kalam::Editor::Context_Session_State write_state;
+    qint64 closed_session = 0;
+    bool closed_write_pending = false;
+    QObject::connect(
+        adapter,
+        &Kalam::Editor::Editor_Neovim_Adapter::contextSessionChanged,
+        adapter,
+        [&](const Kalam::Editor::Context_Session_State& state)
+        {
+            ++changed_count;
+            changed_state = state;
+        });
+    QObject::connect(
+        adapter,
+        &Kalam::Editor::Editor_Neovim_Adapter::contextSessionWriteRequested,
+        adapter,
+        [&](const Kalam::Editor::Context_Session_State& state)
+        {
+            ++write_count;
+            write_state = state;
+        });
+    QObject::connect(
+        adapter,
+        &Kalam::Editor::Editor_Neovim_Adapter::contextSessionClosed,
+        adapter,
+        [&](qint64 session_id, bool write_pending)
+        {
+            ++close_count;
+            closed_session = session_id;
+            closed_write_pending = write_pending;
+        });
+
+    QVariantMap payload;
+    payload.insert(QStringLiteral("session_id"), 12);
+    payload.insert(QStringLiteral("bufnr"), 44);
+    payload.insert(QStringLiteral("window"), 55);
+    payload.insert(QStringLiteral("changedtick"), 8);
+    payload.insert(QStringLiteral("text"), QStringLiteral("{\"x\":1}"));
+    payload.insert(QStringLiteral("mode"), QStringLiteral("i"));
+    payload.insert(QStringLiteral("cursor_row"), 2);
+    payload.insert(QStringLiteral("cursor_column"), 9);
+    payload.insert(QStringLiteral("window_row"), 1);
+    payload.insert(QStringLiteral("window_column"), 3);
+    payload.insert(QStringLiteral("window_width"), 80);
+    payload.insert(QStringLiteral("window_height"), 20);
+    payload.insert(QStringLiteral("modified"), true);
+    payload.insert(QStringLiteral("write_pending"), true);
+    const QVariantList arguments{payload};
+    QByteArray notification = QByteArrayLiteral("nveditor.context_session_changed");
+    check(
+        QMetaObject::invokeMethod(
+            adapter,
+            "handle_notification",
+            Qt::DirectConnection,
+            Q_ARG(QByteArray, notification),
+            Q_ARG(QVariantList, arguments)),
+        QStringLiteral("context change notification invokes the adapter slot"));
+    check(
+        changed_count == 1 && changed_state.session_id == 12 &&
+            changed_state.buffer == 44 && changed_state.window == 55 &&
+            changed_state.changedtick == 8 && changed_state.mode == QByteArrayLiteral("i") &&
+            changed_state.cursor_row == 2 && changed_state.cursor_column == 9 &&
+            changed_state.window_width == 80 && changed_state.window_height == 20 &&
+            changed_state.modified && changed_state.write_pending,
+        QStringLiteral("context change payload preserves mode, cursor, geometry, and state"));
+
+    notification = QByteArrayLiteral("nveditor.context_session_write");
+    QMetaObject::invokeMethod(
+        adapter, "handle_notification", Qt::DirectConnection,
+        Q_ARG(QByteArray, notification), Q_ARG(QVariantList, arguments));
+    check(write_count == 1 && write_state.text_utf8 == QByteArrayLiteral("{\"x\":1}"),
+          QStringLiteral("context write notification preserves staged text"));
+
+    notification = QByteArrayLiteral("nveditor.context_session_closed");
+    QMetaObject::invokeMethod(
+        adapter, "handle_notification", Qt::DirectConnection,
+        Q_ARG(QByteArray, notification), Q_ARG(QVariantList, arguments));
+    check(close_count == 1 && closed_session == 12 && closed_write_pending,
+          QStringLiteral("context close notification preserves pending-write state"));
+}
+
 } // namespace
 
 int main(int argument_count, char** arguments)
@@ -208,6 +296,7 @@ int main(int argument_count, char** arguments)
     check(!adapter.is_ready(),
           QStringLiteral("closed connector remains deterministically not ready"));
     test_not_ready_completions_are_queued(&adapter);
+    test_context_session_notifications(&adapter);
 
     if (failures == 0)
     {

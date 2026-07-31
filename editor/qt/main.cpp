@@ -73,6 +73,10 @@ int main(int argument_count, char** arguments)
         QStringLiteral("Smoke timeout in milliseconds."),
         QStringLiteral("milliseconds"),
         QStringLiteral("15000"));
+    QCommandLineOption smoke_screenshot_option(
+        QStringLiteral("smoke-screenshot"),
+        QStringLiteral("Save the integrated context surface screenshot."),
+        QStringLiteral("file"));
     QCommandLineOption source_root_option(
         QStringLiteral("source-root"),
         QStringLiteral("Project source root."),
@@ -106,6 +110,7 @@ int main(int argument_count, char** arguments)
 
     parser.addOption(smoke_option);
     parser.addOption(smoke_timeout_option);
+    parser.addOption(smoke_screenshot_option);
     parser.addOption(source_root_option);
     parser.addOption(build_directory_option);
     parser.addOption(module_option);
@@ -140,6 +145,9 @@ int main(int argument_count, char** arguments)
         runtime_option,
         QDir(QCoreApplication::applicationDirPath()).filePath(
             QString::fromUtf8(KALAM_NEOVIM_RUNTIME_RELATIVE_PATH))));
+
+    const QString smoke_screenshot = absolute_path(
+        parser.value(smoke_screenshot_option));
 
     if (source_root.isEmpty() || build_directory.isEmpty() ||
         canonical_module.isEmpty() || hot_directory.isEmpty())
@@ -254,13 +262,14 @@ int main(int argument_count, char** arguments)
         QTimer::singleShot(
             0,
             &window,
-            [&window, source_root, effective_timeout]()
+            [&window, source_root, effective_timeout, smoke_screenshot]()
             {
                 const QDir source(source_root);
                 window.start_acceptance_smoke(
                     source.filePath(QStringLiteral("examples/cube.scene.json")),
                     source.filePath(QStringLiteral("examples/post_process.json")),
-                    effective_timeout);
+                    effective_timeout,
+                    smoke_screenshot);
             });
     }
     return application.exec();

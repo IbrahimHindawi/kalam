@@ -81,6 +81,42 @@ set_tests_properties(
 )
 
 add_executable(
+    editor_neovim_theme_bridge_tests
+    neovim_theme_bridge_tests.cpp
+)
+target_link_libraries(
+    editor_neovim_theme_bridge_tests
+    PRIVATE
+        Kalam::EditorQt
+        Kalam::NeovimQt
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+)
+set_target_properties(
+    editor_neovim_theme_bridge_tests
+    PROPERTIES
+        AUTOMOC ON
+        FOLDER "tests/editor"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+kalam_apply_qt_policy(editor_neovim_theme_bridge_tests)
+add_test(
+    NAME editor.neovim_theme_bridge
+    COMMAND editor_neovim_theme_bridge_tests
+)
+set_tests_properties(
+    editor.neovim_theme_bridge
+    PROPERTIES
+        LABELS "editor"
+        TIMEOUT 10
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
+add_executable(
     editor_qt_author_transaction_tests
     author_transaction_regression_tests.cpp
     "${CMAKE_SOURCE_DIR}/editor/qt/author_transaction_controller.h"

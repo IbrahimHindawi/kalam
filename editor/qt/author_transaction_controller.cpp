@@ -5,10 +5,148 @@
 
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QtMath>
+
 
 namespace Kalam::Editor
 {
+
+namespace
+{
+
+int context_component_count(Author_Field_Kind kind)
+{
+    switch (kind)
+    {
+    case Author_Field_Vec2: return 2;
+    case Author_Field_Vec3:
+    case Author_Field_Color3:
+    case Author_Field_Euler_Degrees3:
+        return 3;
+    case Author_Field_Vec4:
+    case Author_Field_Color4:
+        return 4;
+    default:
+        return 1;
+    }
+}
+
+bool json_float(const QJsonValue& json, float* value)
+{
+    if (!json.isDouble() || !qIsFinite(json.toDouble()) || value == nullptr)
+    {
+        return false;
+    }
+    const double number = json.toDouble();
+    const float converted = static_cast<float>(number);
+    if (!qIsFinite(converted)) return false;
+    *value = converted;
+    return true;
+}
+
+bool json_integer(const QJsonValue& json, qint64 minimum, qint64 maximum, qint64* value)
+{
+    if (!json.isDouble() || value == nullptr)
+    {
+        return false;
+    }
+    const double number = json.toDouble();
+    if (!qIsFinite(number) || qFloor(number) != number ||
+        number < static_cast<double>(minimum) ||
+        number > static_cast<double>(maximum))
+    {
+        return false;
+    }
+    *value = static_cast<qint64>(number);
+    return true;
+}
+
+bool json_float_array(
+    const QJsonValue& json,
+    int count,
+    float* values)
+{
+    if (!json.isArray() || json.toArray().size() != count)
+    {
+        return false;
+    }
+    const QJsonArray array = json.toArray();
+    for (int index = 0; index < count; ++index)
+    {
+        if (!json_float(array.at(index), &values[index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool context_value_from_json(
+    const Field_Descriptor& field,
+    const QJsonValue& json,
+    Author_Value_Owned* value)
+{
+    if (value == nullptr)
+    {
+        return false;
+    }
+    *value = {};
+    value->kind = field.kind;
+    if (field.kind == Author_Field_Bool)
+    {
+        if (!json.isBool()) return false;
+        value->boolean = json.toBool();
+        return true;
+    }
+    if (field.kind == Author_Field_String ||
+        field.kind == Author_Field_Asset_Reference)
+    {
+        if (!json.isString()) return false;
+        value->string_utf8 = json.toString().toUtf8();
+        return true;
+    }
+    if (field.kind == Author_Field_I32 || field.kind == Author_Field_Enum)
+    {
+        qint64 integer = 0;
+        const qint64 minimum = field.kind == Author_Field_I32
+            ? -2147483648LL
+            : -9007199254740991LL;
+        const qint64 maximum = field.kind == Author_Field_I32
+            ? 2147483647LL
+            : 9007199254740991LL;
+        if (!json_integer(json, minimum, maximum, &integer)) return false;
+        if (field.kind == Author_Field_I32)
+            value->i32 = static_cast<qint32>(integer);
+        else
+            value->enum_value = integer;
+        return true;
+    }
+    if (field.kind == Author_Field_Transform)
+    {
+        if (!json.isObject()) return false;
+        const QJsonObject object = json.toObject();
+        if (object.size() != 3 ||
+            !json_float_array(object.value(QStringLiteral("translation")), 3,
+                              value->transform.translation) ||
+            !json_float_array(object.value(QStringLiteral("rotation_degrees")), 3,
+                              value->transform.rotation_degrees) ||
+            !json_float_array(object.value(QStringLiteral("scale")), 3,
+                              value->transform.scale))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    const int count = context_component_count(field.kind);
+    return count == 1
+        ? json_float(json, &value->f32[0])
+        : json_float_array(json, count, value->f32);
+}
+
+} // namespace
 
 Author_Transaction_Controller::Author_Transaction_Controller(
     Editor_Runtime_Host* host,
@@ -625,6 +763,64 @@ QByteArray Author_Transaction_Controller::format_value_json(
     }
     result += ']';
     return result;
+}
+
+bool Author_Transaction_Controller::parse_context_values(
+    const QVector<Field_Descriptor>& fields,
+    const QByteArray& text_utf8,
+    QVector<Author_Value_Owned>* values,
+    QString* error)
+{
+    if (values == nullptr)
+    {
+        if (error != nullptr) *error = QStringLiteral("missing context value output");
+        return false;
+    }
+    values->clear();
+
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(text_utf8, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError || !document.isObject())
+    {
+        if (error != nullptr)
+        {
+            *error = parse_error.error == QJsonParseError::NoError
+                ? QStringLiteral("context buffer must contain a JSON object")
+                : QStringLiteral("invalid context JSON: %1").arg(parse_error.errorString());
+        }
+        return false;
+    }
+
+    const QJsonObject object = document.object();
+    if (object.size() != fields.size())
+    {
+        if (error != nullptr)
+            *error = QStringLiteral("context buffer field set does not match the schema");
+        return false;
+    }
+
+    values->reserve(fields.size());
+    for (const Field_Descriptor& field : fields)
+    {
+        const QString name = QString::fromUtf8(field.name);
+        if (!object.contains(name))
+        {
+            if (error != nullptr)
+                *error = QStringLiteral("missing context field: %1").arg(name);
+            values->clear();
+            return false;
+        }
+        Author_Value_Owned value;
+        if (!context_value_from_json(field, object.value(name), &value))
+        {
+            if (error != nullptr)
+                *error = QStringLiteral("invalid value for context field: %1").arg(name);
+            values->clear();
+            return false;
+        }
+        values->push_back(value);
+    }
+    return true;
 }
 
 int Author_Transaction_Controller::component_count(Author_Field_Kind kind)

@@ -28,6 +28,7 @@ public slots:
 signals:
     void viewportInteraction(Kalam::Editor::Viewport_Interaction_Result result);
     void viewportError(QString error);
+    void returnToEditorRequested();
 
 protected:
     void showEvent(QShowEvent* event) override;

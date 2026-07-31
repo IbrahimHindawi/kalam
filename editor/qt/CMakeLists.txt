@@ -32,6 +32,8 @@ set(
     engine_viewport_widget.h
     generated_form.cpp
     generated_form.h
+    neovim_theme_bridge.cpp
+    neovim_theme_bridge.h
     qt_value_widgets.cpp
     qt_value_widgets.h
 )
@@ -140,6 +142,7 @@ if(KALAM_BUILD_TESTS)
             -DKALAM_QT_CORE_RUNTIME_NAME=$<TARGET_FILE_NAME:Qt6::Core>
             -DKALAM_QT_GUI_RUNTIME_NAME=$<TARGET_FILE_NAME:Qt6::Gui>
             -DKALAM_QT_WIDGETS_RUNTIME_NAME=$<TARGET_FILE_NAME:Qt6::Widgets>
+            -DKALAM_PROJECT_NVIM_RUNTIME_SOURCE=${CMAKE_SOURCE_DIR}/editor/neovim/runtime
             -DKALAM_SYSTEM_ROOT=$ENV{SystemRoot}
             -P
             "${CMAKE_SOURCE_DIR}/tests/qt/qt_runtime_deployment_test.cmake"
@@ -164,6 +167,8 @@ if(KALAM_BUILD_TESTS)
                 --hot-directory "${CMAKE_BINARY_DIR}/hot-editor-smoke"
                 --neovim "${KALAM_EDITOR_NEOVIM_EXECUTABLE}"
                 --smoke-timeout 25000
+                --smoke-screenshot
+                "${CMAKE_BINARY_DIR}/context-interaction-smoke.png"
         )
         set_tests_properties(
             editor.integrated_warp_smoke

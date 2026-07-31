@@ -211,9 +211,16 @@ void Engine_Viewport_Widget::wheelEvent(QWheelEvent* event)
 
 void Engine_Viewport_Widget::keyPressEvent(QKeyEvent* event)
 {
-    if (event->key() == Qt::Key_Escape && gizmo_dragging_)
+    if (event->key() == Qt::Key_Escape)
     {
-        cancel_active_gizmo();
+        if (gizmo_dragging_)
+        {
+            cancel_active_gizmo();
+        }
+        else
+        {
+            emit returnToEditorRequested();
+        }
         event->accept();
         return;
     }

@@ -2,6 +2,7 @@ if(NOT DEFINED KALAM_EDITOR_EXECUTABLE OR
    NOT DEFINED KALAM_QT_CORE_RUNTIME_NAME OR
    NOT DEFINED KALAM_QT_GUI_RUNTIME_NAME OR
    NOT DEFINED KALAM_QT_WIDGETS_RUNTIME_NAME OR
+   NOT DEFINED KALAM_PROJECT_NVIM_RUNTIME_SOURCE OR
    NOT DEFINED KALAM_SYSTEM_ROOT)
     message(FATAL_ERROR "Qt runtime deployment test arguments are incomplete.")
 endif()
@@ -32,6 +33,29 @@ if(NOT windows_platform_plugins)
         "Missing deployed Qt Windows platform plugin under "
         "${editor_directory}/platforms")
 endif()
+
+foreach(runtime_relative_path IN ITEMS
+        "lua/nveditor.lua"
+        "plugin/nveditor.lua")
+    set(
+        runtime_source
+        "${KALAM_PROJECT_NVIM_RUNTIME_SOURCE}/${runtime_relative_path}"
+    )
+    set(
+        runtime_staged
+        "${editor_directory}/nvim-runtime/${runtime_relative_path}"
+    )
+    if(NOT EXISTS "${runtime_staged}")
+        message(FATAL_ERROR
+            "Missing staged Neovim runtime file: ${runtime_staged}")
+    endif()
+    file(SHA256 "${runtime_source}" runtime_source_sha256)
+    file(SHA256 "${runtime_staged}" runtime_staged_sha256)
+    if(NOT runtime_source_sha256 STREQUAL runtime_staged_sha256)
+        message(FATAL_ERROR
+            "Staged Neovim runtime is stale: ${runtime_relative_path}")
+    endif()
+endforeach()
 
 execute_process(
     COMMAND

@@ -53,7 +53,8 @@ public:
     void start_acceptance_smoke(
         const QString& cube_document,
         const QString& post_document,
-        int timeout_milliseconds = 15000);
+        int timeout_milliseconds = 15000,
+        const QString& screenshot_path = QString());
     void begin_acceptance_shutdown();
 
 signals:
@@ -72,16 +73,33 @@ private:
     Engine_Viewport_Widget* viewport_ = nullptr;
     QPointer<Context_Popup> context_popup_;
     QPointer<Generated_Form> generated_form_;
+    Context_Session_State context_session_state_;
+    QVector<Field_Descriptor> context_fields_;
+    Source_Context context_source_;
+    qint64 context_session_id_ = 0;
+    quint64 context_preview_changedtick_ = 0;
+    quint64 context_rearm_request_id_ = 0;
+    bool context_session_open_ = false;
+    bool context_write_pending_ = false;
+    bool context_rearming_ = false;
+    bool context_rearm_failed_write_ = false;
+    QString context_write_error_;
     Cursor_Geometry cursor_geometry_;
     quint64 selection_context_request_id_ = 0;
     Document_Handle selection_document_;
+    Document_Handle initial_document_;
     QTimer smoke_timer_;
     QElapsedTimer smoke_clock_;
     QString smoke_cube_document_;
     QString smoke_post_document_;
+    QString smoke_screenshot_path_;
     int smoke_timeout_milliseconds_ = 0;
     bool smoke_documents_applied_ = false;
+    bool smoke_initial_document_verified_ = false;
     quint64 smoke_frame_floor_ = 0;
+    quint64 smoke_context_request_id_ = 0;
+    int smoke_context_phase_ = 0;
+    qint64 smoke_context_initial_row_ = 0;
     bool close_authorized_ = false;
     bool shutting_down_ = false;
 
@@ -90,15 +108,33 @@ private:
         const QVector<Field_Descriptor>& fields,
         const QVector<Author_Value_Owned>& values,
         const Source_Context& context);
+    void handle_context_session_changed(const Context_Session_State& state);
+    void handle_context_session_write(const Context_Session_State& state);
+    void handle_context_session_closed(qint64 session_id, bool write_pending);
+    void handle_context_rearm(
+        quint64 request_id,
+        bool succeeded,
+        const Source_Context& context,
+        const QString& error);
+    void begin_context_rearm(bool failed_write);
+    void project_context_popup();
+    void clear_context_session();
     void open_generated_form(const Buffer_Snapshot& snapshot);
     void refresh_generated_form();
     QVector<Author_Value_Owned> read_form_values(
         const Document_Handle& document,
         const Schema_Descriptor& schema,
         QString* error) const;
+    void focus_viewport();
+    void toggle_viewport();
     void handle_viewport_interaction(
         const Viewport_Interaction_Result& result);
     void handle_selection_context(
+        quint64 request_id,
+        bool succeeded,
+        const Source_Context& context,
+        const QString& error);
+    void handle_smoke_context(
         quint64 request_id,
         bool succeeded,
         const Source_Context& context,
