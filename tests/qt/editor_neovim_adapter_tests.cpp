@@ -1,8 +1,6 @@
 #include "editor_neovim_adapter.h"
 #include "editor_neovim_shell.h"
-
-#include "msgpackrequest.h"
-#include "neovimconnector.h"
+#include "neovim_rpc_client.h"
 
 #include <QApplication>
 #include <QDebug>
@@ -25,48 +23,44 @@ void check(bool condition, const QString& message)
     }
 }
 
-void test_completed_request_stops_timeout_before_nested_loop()
+/*
+ * A settled request must emit exactly once even when its completion handler
+ * spins a nested event loop past the armed timeout deadline.
+ */
+void test_settled_request_stops_timeout_before_nested_loop(
+    Kalam::Editor::Neovim_Rpc_Client* client)
 {
-    NeovimQt::MsgpackRequest request(77, nullptr);
-    int finished_count = 0;
-    int timeout_count = 0;
-    QObject::connect(
-        &request,
-        &NeovimQt::MsgpackRequest::finished,
-        &request,
-        [&](quint32 request_id, quint64, const QVariant&)
-        {
-            ++finished_count;
-            check(request_id == 77,
-                  QStringLiteral("completed vendor request retains its ID"));
-        });
-    QObject::connect(
-        &request,
-        &NeovimQt::MsgpackRequest::timeout,
-        &request,
-        [&](quint32)
-        {
-            ++timeout_count;
-        });
+    int failed_count = 0;
+    QEventLoop completion_loop;
 
-    request.setTimeout(20);
+    Kalam::Editor::Neovim_Rpc_Request* request = client->call(
+        QByteArrayLiteral("any_method"),
+        QVariantList());
+    request->set_timeout(20);
     QObject::connect(
-        &request,
-        &NeovimQt::MsgpackRequest::finished,
-        &request,
-        [&]()
+        request,
+        &Kalam::Editor::Neovim_Rpc_Request::failed,
+        &completion_loop,
+        [&](quint32, const QVariant&, const QString&)
         {
+            ++failed_count;
             QEventLoop nested_loop;
             QTimer::singleShot(75, &nested_loop, &QEventLoop::quit);
             nested_loop.exec();
+            completion_loop.quit();
         });
-    request.finished(77, 9, QVariant());
 
-    check(finished_count == 1,
-          QStringLiteral("completed vendor request finishes exactly once"));
-    check(timeout_count == 0,
+    QTimer guard;
+    guard.setSingleShot(true);
+    QObject::connect(&guard, &QTimer::timeout, &completion_loop,
+                     &QEventLoop::quit);
+    guard.start(2000);
+    completion_loop.exec();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+    check(failed_count == 1,
           QStringLiteral(
-              "completed vendor request stops timeout before nested events"));
+              "settled request emits exactly once past nested events"));
 }
 
 void test_not_ready_completions_are_queued(
@@ -238,14 +232,14 @@ int main(int argument_count, char** arguments)
     QApplication application(argument_count, arguments);
     application.setQuitOnLastWindowClosed(false);
 
-    test_completed_request_stops_timeout_before_nested_loop();
+    /* A client with no device is deterministically not connected. */
+    auto* client = new Kalam::Editor::Neovim_Rpc_Client(&application);
+    test_settled_request_stops_timeout_before_nested_loop(client);
 
-    auto* device = new QProcess();
-    auto* connector = new NeovimQt::NeovimConnector(device);
-    Kalam::Editor::Editor_Neovim_Shell shell(connector);
-    Kalam::Editor::Editor_Neovim_Adapter adapter(connector, &shell);
+    Kalam::Editor::Editor_Neovim_Shell shell(client);
+    Kalam::Editor::Editor_Neovim_Adapter adapter(client, &shell);
     check(!adapter.is_ready(),
-          QStringLiteral("closed connector remains deterministically not ready"));
+          QStringLiteral("closed client remains deterministically not ready"));
     test_not_ready_completions_are_queued(&adapter);
     test_context_notification_preserves_source_screen_position(&adapter);
 

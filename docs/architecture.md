@@ -17,7 +17,7 @@ game_module      -> game_logic + render_d3d11 + module_bridge
 
 platform_win32   -> engine_core
 editor_host      -> module_bridge + platform_win32 + render_d3d11
-editor_qt        -> editor_host + editor_neovim + Qt
+editor_qt        -> editor_host + Qt + nvim --embed (msgpack-RPC)
 standalone_host  -> module_bridge + platform_win32 + render_d3d11
 
 reflection_tool  -> selected engine_core headers only

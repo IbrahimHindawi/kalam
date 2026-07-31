@@ -19,19 +19,19 @@
 #include <QSplitter>
 #include <QtMath>
 
-#include "neovimconnector.h"
+#include "neovim_rpc_client.h"
 
 namespace Kalam::Editor
 {
 
 Editor_Main_Window::Editor_Main_Window(
-    NeovimQt::NeovimConnector* connector,
+    Neovim_Rpc_Client* client,
     Editor_Neovim_Shell* shell,
     const Editor_Configuration& configuration,
     QWidget* parent)
     : QMainWindow(parent), configuration_(configuration), shell_(shell)
 {
-    Q_ASSERT(connector != nullptr);
+    Q_ASSERT(client != nullptr);
     Q_ASSERT(shell != nullptr);
     setObjectName(QStringLiteral("editorMainWindow"));
     setWindowTitle(QStringLiteral("Kalam"));
@@ -41,7 +41,7 @@ Editor_Main_Window::Editor_Main_Window(
     runtime_host_->set_project_root(configuration_.source_root);
     runtime_host_->set_force_warp(configuration_.force_warp);
     runtime_host_->set_acceptance_smoke_mode(configuration_.acceptance_smoke);
-    neovim_ = new Editor_Neovim_Adapter(connector, shell, this);
+    neovim_ = new Editor_Neovim_Adapter(client, shell, this);
     build_controller_ = new Build_Controller(this);
     build_controller_->configure(
         configuration_.build_directory,

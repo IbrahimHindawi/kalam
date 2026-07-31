@@ -1,8 +1,6 @@
 #include "neovim_theme_bridge.h"
 
-#include "auto/neovimapi0.h"
-#include "msgpackrequest.h"
-#include "neovimconnector.h"
+#include "neovim_rpc_client.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -288,11 +286,11 @@ const QByteArray kInstall_Live_Refresh_Hooks_Expression = QByteArrayLiteral(
 } // namespace
 
 Neovim_Theme_Bridge::Neovim_Theme_Bridge(
-    NeovimQt::NeovimConnector* connector,
+    Neovim_Rpc_Client* client,
     QObject* parent)
-    : QObject(parent), connector_(connector)
+    : QObject(parent), client_(client)
 {
-    Q_ASSERT(connector != nullptr);
+    Q_ASSERT(client != nullptr);
     QApplication* application = qobject_cast<QApplication*>(
         QCoreApplication::instance());
     if (application != nullptr)
@@ -302,21 +300,28 @@ Neovim_Theme_Bridge::Neovim_Theme_Bridge(
     }
 
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::ready,
+        client,
+        &Neovim_Rpc_Client::ready,
         this,
         [this]() { handle_ready(); });
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::processExited,
+        client,
+        &Neovim_Rpc_Client::notificationReceived,
         this,
-        [this](int)
+        [this](const QByteArray& name, const QVariantList& arguments)
         {
-            api_ = nullptr;
+            handle_notification(name, arguments);
+        });
+    connect(
+        client,
+        &Neovim_Rpc_Client::disconnected,
+        this,
+        [this](const QString&)
+        {
             request_in_flight_ = false;
             refresh_pending_ = false;
         });
-    if (connector->isReady())
+    if (client->is_ready())
     {
         QTimer::singleShot(0, this, [this]() { handle_ready(); });
     }
@@ -777,24 +782,10 @@ void Neovim_Theme_Bridge::apply_to_application(
 
 void Neovim_Theme_Bridge::handle_ready()
 {
-    if (connector_ == nullptr || api_ != nullptr)
+    if (client_ == nullptr)
     {
         return;
     }
-
-    api_ = connector_->api0();
-    if (api_ == nullptr)
-    {
-        return;
-    }
-    connect(
-        api_,
-        &NeovimQt::NeovimApi0::neovimNotification,
-        this,
-        [this](const QByteArray& name, const QVariantList& arguments)
-        {
-            handle_notification(name, arguments);
-        });
     install_live_refresh_hooks();
     request_refresh();
 }
@@ -812,15 +803,19 @@ void Neovim_Theme_Bridge::handle_notification(
 
 void Neovim_Theme_Bridge::install_live_refresh_hooks()
 {
-    if (api_ == nullptr || connector_ == nullptr)
+    if (client_ == nullptr || !client_->is_ready())
     {
         return;
     }
-    api_->vim_call_function(
-        QByteArrayLiteral("luaeval"),
-        QVariantList{
-            kInstall_Live_Refresh_Hooks_Expression,
-            QVariant::fromValue<qulonglong>(connector_->channel())});
+    QVariantList luaeval_arguments;
+    luaeval_arguments
+        << kInstall_Live_Refresh_Hooks_Expression
+        << QVariant::fromValue<qulonglong>(client_->channel_id());
+    client_->call(
+        QByteArrayLiteral("nvim_call_function"),
+        QVariantList()
+            << QByteArrayLiteral("luaeval")
+            << QVariant(luaeval_arguments));
 }
 
 void Neovim_Theme_Bridge::request_refresh()
@@ -835,25 +830,24 @@ void Neovim_Theme_Bridge::request_refresh()
 
 void Neovim_Theme_Bridge::request_theme_snapshot()
 {
-    if (request_in_flight_ || api_ == nullptr || connector_ == nullptr ||
-        !connector_->isReady())
+    if (request_in_flight_ || client_ == nullptr || !client_->is_ready())
     {
         return;
     }
 
-    NeovimQt::MsgpackRequest* request = api_->vim_call_function(
-        QByteArrayLiteral("luaeval"),
-        QVariantList{kTheme_Snapshot_Expression, QVariant()});
-    if (request == nullptr)
-    {
-        return;
-    }
+    QVariantList luaeval_arguments;
+    luaeval_arguments << kTheme_Snapshot_Expression << QVariant();
+    Neovim_Rpc_Request* request = client_->call(
+        QByteArrayLiteral("nvim_call_function"),
+        QVariantList()
+            << QByteArrayLiteral("luaeval")
+            << QVariant(luaeval_arguments));
     request_in_flight_ = true;
     connect(
         request,
-        &NeovimQt::MsgpackRequest::finished,
+        &Neovim_Rpc_Request::finished,
         this,
-        [this](quint32, quint64, const QVariant& response)
+        [this](quint32, const QVariant& response)
         {
             request_in_flight_ = false;
             const QVariantMap payload = response.toMap();
@@ -883,9 +877,9 @@ void Neovim_Theme_Bridge::request_theme_snapshot()
         });
     connect(
         request,
-        &NeovimQt::MsgpackRequest::error,
+        &Neovim_Rpc_Request::failed,
         this,
-        [this](quint32, quint64, const QVariant&)
+        [this](quint32, const QVariant&, const QString&)
         {
             request_in_flight_ = false;
             if (refresh_pending_)

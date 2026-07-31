@@ -48,8 +48,8 @@ ctest --preset windows-clang-editor-debug
 .\build\windows-clang-editor-debug\nveditor.exe .\examples\cube.scene.json
 ```
 
-The build verifies and patches an immutable Neovim-Qt v0.2.19 checkout, stages
-the editor runtime beside `nveditor.exe`, and links only Qt Core, Gui, and
-Widgets. It may fetch the pinned Neovim-Qt and msgpack sources on first
-configure. For hashes, offline source overrides, licensing, and the exact
-dependency boundary, see [`docs/dependencies.md`](docs/dependencies.md).
+The editor speaks Neovim's msgpack-RPC UI protocol through a first-party
+client (see [`docs/spec_2.md`](docs/spec_2.md)), stages the editor runtime
+beside `nveditor.exe`, and links only Qt Core, Gui, and Widgets. Nothing is
+fetched at configure time. For licensing and the exact dependency boundary,
+see [`docs/dependencies.md`](docs/dependencies.md).

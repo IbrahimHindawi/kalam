@@ -1,7 +1,6 @@
 #include "editor_main_window.h"
 #include "editor_neovim_shell.h"
-
-#include "neovimconnector.h"
+#include "neovim_rpc_client.h"
 
 #include <QApplication>
 #include <QCommandLineOption>
@@ -171,27 +170,23 @@ int main(int argument_count, char** arguments)
         ? QDir(source_root).filePath(QStringLiteral("examples/cube.scene.json"))
         : absolute_path(positional_arguments.first());
 
-    NeovimQt::NeovimConnector* connector =
-        NeovimQt::NeovimConnector::spawn(
-            QStringList(),
-            parser.value(neovim_option));
-    if (connector == nullptr)
+    auto* client = new Kalam::Editor::Neovim_Rpc_Client(&application);
+    if (!client->spawn(parser.value(neovim_option)))
     {
         qCritical().noquote() << QStringLiteral("could not create Neovim process");
         return 2;
     }
-    connector->setParent(&application);
 
-    auto* shell = new Kalam::Editor::Editor_Neovim_Shell(connector);
+    auto* shell = new Kalam::Editor::Editor_Neovim_Shell(client);
     Kalam::Editor::Editor_Main_Window window(
-        connector,
+        client,
         shell,
         configuration);
     bool awaiting_smoke_shutdown = false;
     int smoke_exit_code = 1;
     QObject::connect(
-        connector,
-        &NeovimQt::NeovimConnector::processExited,
+        client,
+        &Kalam::Editor::Neovim_Rpc_Client::processExited,
         &application,
         [&application, &awaiting_smoke_shutdown, &smoke_exit_code](int)
         {
@@ -207,7 +202,7 @@ int main(int argument_count, char** arguments)
         &application,
         [&application,
          &window,
-         connector,
+         client,
          &awaiting_smoke_shutdown,
          &smoke_exit_code](bool succeeded, const QString& reason)
         {
@@ -230,7 +225,7 @@ int main(int argument_count, char** arguments)
                 2000,
                 &application,
                 [&application,
-                 connector,
+                 client,
                  &awaiting_smoke_shutdown,
                  &smoke_exit_code]()
                 {
@@ -238,7 +233,7 @@ int main(int argument_count, char** arguments)
                     {
                         return;
                     }
-                    QProcess* process = connector->findChild<QProcess*>();
+                    QProcess* process = client->process();
                     if (process != nullptr &&
                         process->state() != QProcess::NotRunning)
                     {

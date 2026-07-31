@@ -1,10 +1,7 @@
 #include "editor_neovim_adapter.h"
 
 #include "editor_neovim_shell.h"
-
-#include "auto/neovimapi0.h"
-#include "msgpackrequest.h"
-#include "neovimconnector.h"
+#include "neovim_rpc_client.h"
 
 #include <QFileInfo>
 #include <QTimer>
@@ -41,41 +38,34 @@ QVariantMap unwrap_lua_result(
 } // namespace
 
 Editor_Neovim_Adapter::Editor_Neovim_Adapter(
-    NeovimQt::NeovimConnector* connector,
+    Neovim_Rpc_Client* client,
     Editor_Neovim_Shell* shell,
     QObject* parent)
-    : QObject(parent), connector_(connector), shell_(shell)
+    : QObject(parent), client_(client), shell_(shell)
 {
-    Q_ASSERT(connector != nullptr);
+    Q_ASSERT(client != nullptr);
     Q_ASSERT(shell != nullptr);
 
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::ready,
+        client,
+        &Neovim_Rpc_Client::ready,
         this,
         &Editor_Neovim_Adapter::handle_ready);
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::error,
+        client,
+        &Neovim_Rpc_Client::notificationReceived,
         this,
-        [this](NeovimQt::NeovimConnector::NeovimError)
-        {
-            if (connector_ != nullptr)
-            {
-                emit disconnected(connector_->errorString());
-            }
-        });
+        &Editor_Neovim_Adapter::handle_notification);
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::processExited,
+        client,
+        &Neovim_Rpc_Client::disconnected,
         this,
-        [this](int exit_code)
+        [this](const QString& reason)
         {
-            emit disconnected(
-                QStringLiteral("Neovim exited with code %1").arg(exit_code));
+            emit disconnected(reason);
         });
 
-    if (connector->isReady())
+    if (client->is_ready())
     {
         handle_ready();
     }
@@ -100,7 +90,7 @@ void Editor_Neovim_Adapter::open_file(const QString& path)
         QStringLiteral("execute 'edit ' . fnameescape('%1')")
             .arg(vim_single_quote(QFileInfo(path).absoluteFilePath()))
             .toUtf8();
-    api_->vim_command(command);
+    run_command(command);
 }
 
 void Editor_Neovim_Adapter::open_file_location(
@@ -136,7 +126,7 @@ quint64 Editor_Neovim_Adapter::request_context_for_path(
     argument.insert(QStringLiteral("bufnr"), buffer);
     argument.insert(QStringLiteral("json_path"), json_path);
 
-    NeovimQt::MsgpackRequest* request = call_lua(
+    Neovim_Rpc_Request* request = call_lua(
         QByteArrayLiteral(
             "(function() local r,e="
             "require('nveditor').context_for_path(_A.bufnr,_A.json_path); "
@@ -157,9 +147,9 @@ quint64 Editor_Neovim_Adapter::request_context_for_path(
 
     connect(
         request,
-        &NeovimQt::MsgpackRequest::finished,
+        &Neovim_Rpc_Request::finished,
         this,
-        [this, request_id](quint32, quint64, const QVariant& response)
+        [this, request_id](quint32, const QVariant& response)
         {
             bool succeeded = false;
             QString error;
@@ -177,15 +167,18 @@ quint64 Editor_Neovim_Adapter::request_context_for_path(
         });
     connect(
         request,
-        &NeovimQt::MsgpackRequest::error,
+        &Neovim_Rpc_Request::failed,
         this,
-        [this, request_id](quint32, quint64, const QVariant& error)
+        [this, request_id](
+            quint32,
+            const QVariant&,
+            const QString& message)
         {
             emit contextForPathFinished(
                 request_id,
                 false,
                 Source_Context{},
-                error.toString());
+                message);
         });
     return request_id;
 }
@@ -210,7 +203,7 @@ quint64 Editor_Neovim_Adapter::patch_text(
         QStringLiteral("replacement"),
         QString::fromUtf8(replacement_utf8));
 
-    NeovimQt::MsgpackRequest* request = call_lua(
+    Neovim_Rpc_Request* request = call_lua(
         QByteArrayLiteral(
             "(function() local r,e=require('nveditor').patch_text(_A); "
             "return {ok=r~=nil,result=r,error=e} end)()"),
@@ -230,9 +223,9 @@ quint64 Editor_Neovim_Adapter::patch_text(
 
     connect(
         request,
-        &NeovimQt::MsgpackRequest::finished,
+        &Neovim_Rpc_Request::finished,
         this,
-        [this, request_id](quint32, quint64, const QVariant& response)
+        [this, request_id](quint32, const QVariant& response)
         {
             bool succeeded = false;
             QString error;
@@ -246,15 +239,18 @@ quint64 Editor_Neovim_Adapter::patch_text(
         });
     connect(
         request,
-        &NeovimQt::MsgpackRequest::error,
+        &Neovim_Rpc_Request::failed,
         this,
-        [this, request_id](quint32, quint64, const QVariant& error)
+        [this, request_id](
+            quint32,
+            const QVariant&,
+            const QString& message)
         {
             emit textPatchFinished(
                 request_id,
                 false,
                 0,
-                error.toString());
+                message);
         });
     return request_id;
 }
@@ -326,7 +322,7 @@ void Editor_Neovim_Adapter::request_neovim_close(bool force)
 {
     if (is_ready())
     {
-        api_->vim_command(
+        run_command(
             force
                 ? QByteArrayLiteral("qall!")
                 : QByteArrayLiteral("confirm qall"));
@@ -335,7 +331,7 @@ void Editor_Neovim_Adapter::request_neovim_close(bool force)
 
 bool Editor_Neovim_Adapter::is_ready() const
 {
-    return connector_ != nullptr && api_ != nullptr && connector_->isReady();
+    return client_ != nullptr && client_->is_ready();
 }
 
 Editor_Neovim_Shell* Editor_Neovim_Adapter::shell() const
@@ -345,23 +341,6 @@ Editor_Neovim_Shell* Editor_Neovim_Adapter::shell() const
 
 void Editor_Neovim_Adapter::handle_ready()
 {
-    if (connector_ == nullptr || api_ != nullptr)
-    {
-        return;
-    }
-
-    api_ = connector_->api0();
-    if (api_ == nullptr)
-    {
-        emit disconnected(QStringLiteral("Neovim API level 0 is unavailable"));
-        return;
-    }
-
-    connect(
-        api_,
-        &NeovimQt::NeovimApi0::neovimNotification,
-        this,
-        &Editor_Neovim_Adapter::handle_notification);
     run_runtime_initialization();
     if (!pending_open_file_.isEmpty())
     {
@@ -436,7 +415,7 @@ quint64 Editor_Neovim_Adapter::allocate_request_id()
     return result;
 }
 
-NeovimQt::MsgpackRequest* Editor_Neovim_Adapter::call_lua(
+Neovim_Rpc_Request* Editor_Neovim_Adapter::call_lua(
     const QByteArray& expression,
     const QVariant& argument)
 {
@@ -444,9 +423,23 @@ NeovimQt::MsgpackRequest* Editor_Neovim_Adapter::call_lua(
     {
         return nullptr;
     }
-    return api_->vim_call_function(
-        QByteArrayLiteral("luaeval"),
-        QVariantList{expression, argument});
+    QVariantList luaeval_arguments;
+    luaeval_arguments << expression << argument;
+    return client_->call(
+        QByteArrayLiteral("nvim_call_function"),
+        QVariantList()
+            << QByteArrayLiteral("luaeval")
+            << QVariant(luaeval_arguments));
+}
+
+void Editor_Neovim_Adapter::run_command(const QByteArray& command)
+{
+    if (client_ != nullptr)
+    {
+        client_->call(
+            QByteArrayLiteral("nvim_command"),
+            QVariantList() << command);
+    }
 }
 
 void Editor_Neovim_Adapter::run_runtime_initialization()
@@ -457,14 +450,16 @@ void Editor_Neovim_Adapter::run_runtime_initialization()
     }
 
     const QString escaped = vim_single_quote(runtime_directory_);
-    api_->vim_command(
+    run_command(
         QStringLiteral("execute 'set runtimepath^=' . fnameescape('%1')")
             .arg(escaped)
             .toUtf8());
-    api_->vim_set_var(
-        QByteArrayLiteral("nveditor_channel_id"),
-        QVariant::fromValue<qulonglong>(connector_->channel()));
-    api_->vim_command(QByteArrayLiteral("runtime plugin/nveditor.lua"));
+    client_->call(
+        QByteArrayLiteral("nvim_set_var"),
+        QVariantList()
+            << QByteArrayLiteral("nveditor_channel_id")
+            << QVariant::fromValue<qulonglong>(client_->channel_id()));
+    run_command(QByteArrayLiteral("runtime plugin/nveditor.lua"));
     runtime_initialized_ = true;
 }
 

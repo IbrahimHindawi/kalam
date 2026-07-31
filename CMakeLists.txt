@@ -638,7 +638,6 @@ if(KALAM_BUILD_TESTS)
 endif()
 
 if(KALAM_BUILD_EDITOR)
-    include(KalamNeovimQt)
-    add_subdirectory(editor/neovim)
+    include(KalamEditorRuntime)
     add_subdirectory(editor/qt)
 endif()

@@ -1,8 +1,3 @@
-if(NOT TARGET Kalam::NeovimQt)
-    message(FATAL_ERROR
-        "editor/qt requires the pinned Kalam::NeovimQt target")
-endif()
-
 find_package(
     Qt6
     6.8.3
@@ -32,6 +27,16 @@ set(
     engine_viewport_widget.h
     generated_form.cpp
     generated_form.h
+    neovim_grid_model.cpp
+    neovim_grid_model.h
+    neovim_grid_widget.cpp
+    neovim_grid_widget.h
+    neovim_input_translation.cpp
+    neovim_input_translation.h
+    neovim_msgpack.cpp
+    neovim_msgpack.h
+    neovim_rpc_client.cpp
+    neovim_rpc_client.h
     neovim_theme_bridge.cpp
     neovim_theme_bridge.h
     qt_value_widgets.cpp
@@ -59,7 +64,6 @@ target_link_libraries(
         Qt6::Widgets
         module_bridge
     PRIVATE
-        Kalam::NeovimQt
         host_common
         d3d11_viewport_host
 )
@@ -89,7 +93,6 @@ target_link_libraries(
     nveditor
     PRIVATE
         Kalam::EditorQt
-        Kalam::NeovimQt
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
@@ -105,7 +108,10 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 kalam_apply_qt_policy(nveditor)
-kalam_stage_neovim_runtime(nveditor)
+kalam_stage_editor_runtime(
+    nveditor
+    "${CMAKE_SOURCE_DIR}/editor/neovim/runtime"
+)
 
 if(WIN32)
     if(NOT TARGET Qt6::windeployqt)

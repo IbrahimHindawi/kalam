@@ -70,6 +70,38 @@ foreach(_source IN LISTS _editor_sources)
         kalam_check_editor_policy(
             "permanent dock UI is forbidden"
             "(^|[^A-Za-z0-9_])QDockWidget([^A-Za-z0-9_]|$)")
+        kalam_check_editor_policy(
+            "the removed Neovim-Qt dependency is referenced"
+            "(NeovimQt|neovimconnector\\.h|msgpackrequest\\.h|msgpackiodevice\\.h|neovimapi[0-9])")
+    endforeach()
+endforeach()
+
+# The Neovim-Qt ban covers every first-party editor source, not only
+# editor/qt (spec_2.md section 9).
+file(GLOB_RECURSE _editor_wide_sources
+    LIST_DIRECTORIES FALSE
+    "${_repository_root}/editor/host/*.cpp"
+    "${_repository_root}/editor/host/*.h"
+    "${_repository_root}/editor/win32/*.cpp"
+    "${_repository_root}/editor/win32/*.h"
+    "${_repository_root}/editor/neovim/*.lua"
+    "${_repository_root}/editor/neovim/*.cmake"
+    "${_repository_root}/editor/neovim/*.cpp"
+    "${_repository_root}/editor/neovim/*.h")
+list(SORT _editor_wide_sources)
+
+foreach(_source IN LISTS _editor_wide_sources)
+    cmake_path(
+        RELATIVE_PATH _source
+        BASE_DIRECTORY "${_repository_root}"
+        OUTPUT_VARIABLE _relative_path)
+    file(STRINGS "${_source}" _lines ENCODING UTF-8)
+    set(_line_number 0)
+    foreach(_line IN LISTS _lines)
+        math(EXPR _line_number "${_line_number} + 1")
+        kalam_check_editor_policy(
+            "the removed Neovim-Qt dependency is referenced"
+            "(NeovimQt|neovimconnector\\.h|msgpackrequest\\.h|msgpackiodevice\\.h|neovimapi[0-9])")
     endforeach()
 endforeach()
 

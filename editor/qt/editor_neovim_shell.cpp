@@ -1,5 +1,6 @@
 #include "editor_neovim_shell.h"
 
+#include "neovim_rpc_client.h"
 #include "neovim_theme_bridge.h"
 
 #include <QMoveEvent>
@@ -7,39 +8,44 @@
 #include <QShowEvent>
 #include <QTimer>
 
-#include "neovimconnector.h"
-
 namespace Kalam::Editor
 {
 
 Editor_Neovim_Shell::Editor_Neovim_Shell(
-    NeovimQt::NeovimConnector* connector,
+    Neovim_Rpc_Client* client,
     QWidget* parent)
-    : NeovimQt::Shell(connector, parent)
+    : Neovim_Grid_Widget(client, parent)
+    , client_(client)
 {
-    theme_bridge_ = new Neovim_Theme_Bridge(connector, this);
+    Q_ASSERT(client != nullptr);
+    theme_bridge_ = new Neovim_Theme_Bridge(client, this);
 
     connect(
-        connector,
-        &NeovimQt::NeovimConnector::ready,
+        client,
+        &Neovim_Rpc_Client::ready,
         this,
-        [this]()
-        {
-            init();
-        },
+        &Editor_Neovim_Shell::attach_when_ready,
         Qt::QueuedConnection);
-    if (connector->isReady())
+    if (client->is_ready())
     {
-        QTimer::singleShot(0, this, [this]()
-        {
-            init();
-        });
+        QTimer::singleShot(
+            0,
+            this,
+            &Editor_Neovim_Shell::attach_when_ready);
     }
     connect(
+        client,
+        &Neovim_Rpc_Client::processExited,
         this,
-        &ShellWidget::cellSizeChanged,
+        [this](int exit_code)
+        {
+            emit neovimGuiCloseRequest(exit_code);
+        });
+    connect(
         this,
-        [this](QSize)
+        &Neovim_Grid_Widget::cursorRectangleChanged,
+        this,
+        [this](QRect)
         {
             publish_cursor_geometry();
         });
@@ -48,35 +54,40 @@ Editor_Neovim_Shell::Editor_Neovim_Shell(
 Cursor_Geometry Editor_Neovim_Shell::cursor_geometry() const
 {
     Cursor_Geometry geometry;
-    geometry.grid = active_grid_;
-    geometry.row = m_cursor_pos.y();
-    geometry.column = m_cursor_pos.x();
-    geometry.cell_size = cellSize();
+    geometry.grid = 1;
+    geometry.row = model().cursor_row();
+    geometry.column = model().cursor_column();
+    geometry.cell_size = cell_size();
     geometry.grid_origin = QPoint(0, 0);
-    geometry.cursor_rect = neovimCursorRect();
+    geometry.cursor_rect = cursor_cell_rectangle();
     return geometry;
 }
 
-void Editor_Neovim_Shell::handleGridCursorGoto(
-    const QVariantList& arguments)
+bool Editor_Neovim_Shell::isNeovimAttached() const
 {
-    if (!arguments.isEmpty())
-    {
-        bool converted = false;
-        const qint64 grid = arguments.at(0).toLongLong(&converted);
-        if (converted)
-        {
-            active_grid_ = grid;
-        }
-    }
+    return is_attached() && client_ != nullptr && client_->is_connected();
+}
 
-    NeovimQt::Shell::handleGridCursorGoto(arguments);
-    publish_cursor_geometry();
+bool Editor_Neovim_Shell::close()
+{
+    if (client_ == nullptr || !client_->is_ready())
+    {
+        return QWidget::close();
+    }
+    client_->call(
+        QByteArrayLiteral("nvim_command"),
+        QVariantList() << QByteArrayLiteral("confirm qall"));
+    return false;
+}
+
+void Editor_Neovim_Shell::attach_when_ready()
+{
+    attach_ui();
 }
 
 void Editor_Neovim_Shell::resizeEvent(QResizeEvent* event)
 {
-    NeovimQt::Shell::resizeEvent(event);
+    Neovim_Grid_Widget::resizeEvent(event);
     QTimer::singleShot(
         0,
         this,
@@ -88,13 +99,14 @@ void Editor_Neovim_Shell::resizeEvent(QResizeEvent* event)
 
 void Editor_Neovim_Shell::moveEvent(QMoveEvent* event)
 {
-    NeovimQt::Shell::moveEvent(event);
+    Neovim_Grid_Widget::moveEvent(event);
     publish_cursor_geometry();
 }
 
 void Editor_Neovim_Shell::showEvent(QShowEvent* event)
 {
-    NeovimQt::Shell::showEvent(event);
+    Neovim_Grid_Widget::showEvent(event);
+    attach_when_ready();
     publish_cursor_geometry();
 }
 

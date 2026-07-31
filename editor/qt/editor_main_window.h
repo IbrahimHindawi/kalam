@@ -8,11 +8,6 @@
 #include <QPointer>
 #include <QTimer>
 
-namespace NeovimQt
-{
-class NeovimConnector;
-}
-
 namespace Kalam::Editor
 {
 
@@ -24,6 +19,7 @@ class Editor_Neovim_Shell;
 class Editor_Runtime_Host;
 class Engine_Viewport_Widget;
 class Generated_Form;
+class Neovim_Rpc_Client;
 
 struct Editor_Configuration
 {
@@ -44,7 +40,7 @@ class Editor_Main_Window final : public QMainWindow
 
 public:
     Editor_Main_Window(
-        NeovimQt::NeovimConnector* connector,
+        Neovim_Rpc_Client* client,
         Editor_Neovim_Shell* shell,
         const Editor_Configuration& configuration,
         QWidget* parent = nullptr);

@@ -3,43 +3,54 @@
 
 #include "editor_types.h"
 
-#include "shell.h"
+#include "neovim_grid_widget.h"
 
 namespace Kalam::Editor
 {
 
+class Neovim_Rpc_Client;
 class Neovim_Theme_Bridge;
 
 /*
- * A deliberately tiny Neovim-Qt adaptation. The upstream Shell remains a
- * reusable QWidget; this subclass exposes cursor geometry already known by
- * ShellWidget and emits it at the point where grid-cursor updates arrive.
+ * The editor's Neovim surface: the Kalam-owned grid widget plus the editor
+ * contracts the main window relies on — cursor geometry publication, the
+ * attach flag, and the confirm-quit close handshake (spec_2.md section 2.1).
  */
-class Editor_Neovim_Shell final : public NeovimQt::Shell
+class Editor_Neovim_Shell final : public Neovim_Grid_Widget
 {
     Q_OBJECT
 
 public:
     explicit Editor_Neovim_Shell(
-        NeovimQt::NeovimConnector* connector,
+        Neovim_Rpc_Client* client,
         QWidget* parent = nullptr);
 
     Cursor_Geometry cursor_geometry() const;
+    bool isNeovimAttached() const;
+
+    /*
+     * Asks Neovim to quit with confirmation and reports false; the actual
+     * close is authorized later by neovimGuiCloseRequest when the process
+     * exits. Shadows QWidget::close on purpose, matching the previous
+     * shell's contract.
+     */
+    bool close();
 
 signals:
     void cursorGeometryChanged(Kalam::Editor::Cursor_Geometry geometry);
+    void neovimGuiCloseRequest(int status);
 
 protected:
-    void handleGridCursorGoto(const QVariantList& arguments) override;
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
     void showEvent(QShowEvent* event) override;
 
 private:
-    qint64 active_grid_ = 1;
+    Neovim_Rpc_Client* client_ = nullptr;
     Neovim_Theme_Bridge* theme_bridge_ = nullptr;
 
     void publish_cursor_geometry();
+    void attach_when_ready();
 };
 
 } // namespace Kalam::Editor

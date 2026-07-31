@@ -53,7 +53,6 @@ target_link_libraries(
     editor_neovim_adapter_tests
     PRIVATE
         Kalam::EditorQt
-        Kalam::NeovimQt
         Qt6::Core
         Qt6::Widgets
 )
@@ -88,7 +87,6 @@ target_link_libraries(
     editor_neovim_theme_bridge_tests
     PRIVATE
         Kalam::EditorQt
-        Kalam::NeovimQt
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
@@ -152,6 +150,158 @@ set_tests_properties(
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 )
+
+add_executable(
+    neovim_msgpack_tests
+    neovim_msgpack_tests.cpp
+)
+target_link_libraries(
+    neovim_msgpack_tests
+    PRIVATE
+        Kalam::EditorQt
+        Qt6::Core
+)
+set_target_properties(
+    neovim_msgpack_tests
+    PROPERTIES
+        AUTOMOC ON
+        FOLDER "tests/editor"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+kalam_apply_qt_policy(neovim_msgpack_tests)
+add_test(NAME editor.neovim_msgpack COMMAND neovim_msgpack_tests)
+set_tests_properties(
+    editor.neovim_msgpack
+    PROPERTIES
+        LABELS "editor"
+        TIMEOUT 20
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
+add_executable(
+    neovim_rpc_client_tests
+    neovim_rpc_client_tests.cpp
+)
+target_link_libraries(
+    neovim_rpc_client_tests
+    PRIVATE
+        Kalam::EditorQt
+        Qt6::Core
+)
+set_target_properties(
+    neovim_rpc_client_tests
+    PROPERTIES
+        AUTOMOC ON
+        FOLDER "tests/editor"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+kalam_apply_qt_policy(neovim_rpc_client_tests)
+add_test(NAME editor.neovim_rpc_client COMMAND neovim_rpc_client_tests)
+set_tests_properties(
+    editor.neovim_rpc_client
+    PROPERTIES
+        LABELS "editor"
+        TIMEOUT 30
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
+add_executable(
+    neovim_grid_model_tests
+    neovim_grid_model_tests.cpp
+)
+target_link_libraries(
+    neovim_grid_model_tests
+    PRIVATE
+        Kalam::EditorQt
+        Qt6::Core
+        Qt6::Gui
+)
+set_target_properties(
+    neovim_grid_model_tests
+    PROPERTIES
+        AUTOMOC ON
+        FOLDER "tests/editor"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+kalam_apply_qt_policy(neovim_grid_model_tests)
+add_test(NAME editor.neovim_grid_model COMMAND neovim_grid_model_tests)
+set_tests_properties(
+    editor.neovim_grid_model
+    PROPERTIES
+        LABELS "editor"
+        TIMEOUT 20
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
+add_executable(
+    neovim_grid_widget_tests
+    neovim_grid_widget_tests.cpp
+)
+target_link_libraries(
+    neovim_grid_widget_tests
+    PRIVATE
+        Kalam::EditorQt
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+)
+set_target_properties(
+    neovim_grid_widget_tests
+    PROPERTIES
+        AUTOMOC ON
+        FOLDER "tests/editor"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
+kalam_apply_qt_policy(neovim_grid_widget_tests)
+add_test(NAME editor.neovim_grid_widget COMMAND neovim_grid_widget_tests)
+set_tests_properties(
+    editor.neovim_grid_widget
+    PROPERTIES
+        LABELS "editor"
+        TIMEOUT 20
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+
+find_program(KALAM_TEST_NEOVIM_EXECUTABLE NAMES nvim)
+if(KALAM_TEST_NEOVIM_EXECUTABLE)
+    add_test(
+        NAME editor.neovim_rpc_client_real_nvim
+        COMMAND
+            neovim_rpc_client_tests
+            --nvim "${KALAM_TEST_NEOVIM_EXECUTABLE}"
+    )
+    set_tests_properties(
+        editor.neovim_rpc_client_real_nvim
+        PROPERTIES
+            LABELS "editor"
+            TIMEOUT 60
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+    add_test(
+        NAME editor.neovim_grid_model_real_nvim
+        COMMAND
+            neovim_grid_model_tests
+            --nvim "${KALAM_TEST_NEOVIM_EXECUTABLE}"
+    )
+    set_tests_properties(
+        editor.neovim_grid_model_real_nvim
+        PROPERTIES
+            LABELS "editor"
+            TIMEOUT 60
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+else()
+    message(STATUS
+        "Neovim was not found; the real-nvim RPC client test is skipped.")
+endif()
 
 add_test(
     NAME editor.qt_source_firewall

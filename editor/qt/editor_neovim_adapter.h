@@ -7,17 +7,12 @@
 #include <QPointer>
 #include <QVariantList>
 
-namespace NeovimQt
-{
-class NeovimApi0;
-class NeovimConnector;
-class MsgpackRequest;
-}
-
 namespace Kalam::Editor
 {
 
 class Editor_Neovim_Shell;
+class Neovim_Rpc_Client;
+class Neovim_Rpc_Request;
 
 class Editor_Neovim_Adapter final : public QObject
 {
@@ -25,7 +20,7 @@ class Editor_Neovim_Adapter final : public QObject
 
 public:
     explicit Editor_Neovim_Adapter(
-        NeovimQt::NeovimConnector* connector,
+        Neovim_Rpc_Client* client,
         Editor_Neovim_Shell* shell,
         QObject* parent = nullptr);
 
@@ -86,9 +81,8 @@ private slots:
         const QVariantList& arguments);
 
 private:
-    QPointer<NeovimQt::NeovimConnector> connector_;
+    QPointer<Neovim_Rpc_Client> client_;
     QPointer<Editor_Neovim_Shell> shell_;
-    QPointer<NeovimQt::NeovimApi0> api_;
     QString runtime_directory_;
     QString pending_open_file_;
     quint64 next_request_id_ = 1;
@@ -96,9 +90,10 @@ private:
     bool range_fallback_reported_ = false;
 
     quint64 allocate_request_id();
-    NeovimQt::MsgpackRequest* call_lua(
+    Neovim_Rpc_Request* call_lua(
         const QByteArray& expression,
         const QVariant& argument);
+    void run_command(const QByteArray& command);
     void run_runtime_initialization();
     void report_range_fallback(const Source_Context& context);
 

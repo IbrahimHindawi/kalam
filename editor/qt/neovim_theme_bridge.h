@@ -11,14 +11,10 @@
 
 class QApplication;
 
-namespace NeovimQt
-{
-class NeovimApi0;
-class NeovimConnector;
-}
-
 namespace Kalam::Editor
 {
+
+class Neovim_Rpc_Client;
 
 /*
  * The application-facing subset of Neovim's highlight table.  The bridge
@@ -66,7 +62,7 @@ class Neovim_Theme_Bridge final : public QObject
 {
 public:
     explicit Neovim_Theme_Bridge(
-        NeovimQt::NeovimConnector* connector,
+        Neovim_Rpc_Client* client,
         QObject* parent = nullptr);
 
     static Neovim_Theme theme_from_payload(
@@ -79,8 +75,7 @@ public:
         const Neovim_Theme& theme);
 
 private:
-    QPointer<NeovimQt::NeovimConnector> connector_;
-    QPointer<NeovimQt::NeovimApi0> api_;
+    QPointer<Neovim_Rpc_Client> client_;
     QPalette fallback_palette_;
     QFont fallback_font_;
     QString last_fingerprint_;
