@@ -4,6 +4,8 @@
 #include "qt_value_widgets.h"
 
 #include <QApplication>
+
+#include <stdio.h>
 #include <QDebug>
 #include <QDoubleSpinBox>
 #include <QFrame>
@@ -19,7 +21,7 @@ void check(bool condition, const QString& message)
 {
     if (!condition)
     {
-        qCritical().noquote() << QStringLiteral("check failed: %1").arg(message);
+        fprintf(stderr, "check failed: %s\n", qUtf8Printable(message));
         ++failures;
     }
 }
@@ -120,6 +122,49 @@ void test_highlight_role_mapping()
               qFuzzyCompare(theme.font.pointSizeF(), 13.0) &&
               theme.font.bold(),
           QStringLiteral("guifont supplies Qt chrome font"));
+}
+
+/*
+ * Qt surfaces must render in the same font as the Neovim grid. With
+ * 'guifont' unset the theme adopts the grid's font instead of the Qt
+ * default; with it set, the parsed family and height win.
+ */
+void test_editor_font_is_shared_with_qt_surfaces()
+{
+    QVariantMap payload;
+    payload.insert(QStringLiteral("highlights"), QVariantMap());
+
+    QFont grid_font(QStringLiteral("Cascadia Mono"), 13);
+    const Kalam::Editor::Neovim_Theme without_guifont =
+        Kalam::Editor::Neovim_Theme_Bridge::theme_from_payload(
+            payload,
+            fallback_palette(),
+            grid_font);
+    check(
+        !without_guifont.has_neovim_font,
+        "an unset guifont is reported as absent");
+    check(
+        without_guifont.font.family() == QStringLiteral("Cascadia Mono") &&
+            qFuzzyCompare(without_guifont.font.pointSizeF(), 13.0),
+        "an unset guifont adopts the grid font, not the Qt default");
+
+    payload.insert(
+        QStringLiteral("guifont"),
+        QStringLiteral("JetBrains\\ Mono:h15"));
+    const Kalam::Editor::Neovim_Theme with_guifont =
+        Kalam::Editor::Neovim_Theme_Bridge::theme_from_payload(
+            payload,
+            fallback_palette(),
+            grid_font);
+    check(
+        with_guifont.has_neovim_font,
+        "a set guifont is reported as present");
+    check(
+        with_guifont.font.family() == QStringLiteral("JetBrains Mono"),
+        "an escaped guifont family is unescaped");
+    check(
+        qFuzzyCompare(with_guifont.font.pointSizeF(), 15.0),
+        "the guifont height becomes the point size");
 }
 
 void test_fallbacks_and_application_refresh(QApplication* application)
@@ -238,12 +283,22 @@ void test_modal_context_popup(QApplication* application)
 
     check(
         popup.isVisible() &&
-            popup.width() <= 520 &&
-            popup.height() <= 420,
+            popup.width() <= popup.compact_size_limit().width() &&
+            popup.height() <= popup.compact_size_limit().height(),
         QStringLiteral("context popup remains a compact transient surface"));
+    /*
+     * The popup shows all of its content rather than staying beside the
+     * cursor: a wide monospace face makes the form wider than the space
+     * next to the cursor, and clipping a field is worse than overlapping.
+     * What must hold is that it is fully on screen and never truncated.
+     */
     check(
-        popup.geometry().left() > source_cursor.right(),
-        QStringLiteral("context popup opens beside the captured source cursor"));
+        shell.rect().contains(popup.geometry()),
+        QStringLiteral("context popup stays inside the editor surface"));
+    check(
+        popup.width() >= qMin(popup.sizeHint().width(), shell.width()) &&
+            popup.height() >= qMin(popup.sizeHint().height(), shell.height()),
+        QStringLiteral("context popup shows its content without cuts"));
     check(
         popup.geometry().bottom() < source_cursor.top() &&
             shell.height() - popup.geometry().bottom() >=
@@ -447,6 +502,7 @@ int main(int argument_count, char** arguments)
     QApplication application(argument_count, arguments);
     application.setQuitOnLastWindowClosed(false);
     test_highlight_role_mapping();
+    test_editor_font_is_shared_with_qt_surfaces();
     test_fallbacks_and_application_refresh(&application);
     test_modal_context_popup(&application);
     test_modal_generated_form(&application);

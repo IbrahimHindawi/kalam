@@ -5,6 +5,8 @@
 
 #include "neovim_grid_widget.h"
 
+#include <QFont>
+
 namespace Kalam::Editor
 {
 
@@ -50,7 +52,13 @@ private:
     Neovim_Theme_Bridge* theme_bridge_ = nullptr;
 
     void publish_cursor_geometry();
+    void publish_editor_font();
     void attach_when_ready();
+
+    /* Parses Neovim's 'guifont' ("Family:h12"); unparsable keeps fallback. */
+    static QFont font_from_guifont(
+        const QString& guifont,
+        const QFont& fallback);
 };
 
 } // namespace Kalam::Editor

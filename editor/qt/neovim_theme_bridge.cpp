@@ -1,5 +1,6 @@
 #include "neovim_theme_bridge.h"
 
+#include "neovim_font_names.h"
 #include "neovim_rpc_client.h"
 
 #include <QApplication>
@@ -193,7 +194,8 @@ QFont font_from_option(const QString& option, const QFont& fallback, bool* used)
     }
 
     QFont result = fallback;
-    result.setFamily(family);
+    /* Terminal-style names must map onto Qt families; see the header. */
+    result.setFamily(neovim_resolve_font_family(family));
     const QRegularExpression height_expression(
         QStringLiteral("(?:^|:)h([0-9]+(?:\\.[0-9]+)?)"));
     const QRegularExpressionMatch height =
@@ -325,6 +327,18 @@ Neovim_Theme_Bridge::Neovim_Theme_Bridge(
     {
         QTimer::singleShot(0, this, [this]() { handle_ready(); });
     }
+}
+
+void Neovim_Theme_Bridge::set_editor_font(const QFont& font)
+{
+    if (fallback_font_ == font)
+    {
+        return;
+    }
+    fallback_font_ = font;
+    /* Force the next snapshot to re-apply even if colours are unchanged. */
+    last_fingerprint_.clear();
+    request_refresh();
 }
 
 Neovim_Theme Neovim_Theme_Bridge::theme_from_payload(

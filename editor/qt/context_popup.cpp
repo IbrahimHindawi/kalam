@@ -3,11 +3,14 @@
 #include "qt_value_widgets.h"
 
 #include <QEvent>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -26,6 +29,8 @@ Context_Popup::Context_Popup(
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_StyledBackground, true);
+    /* Needed so the corner shows the resize cursor without a button held. */
+    setMouseTracking(true);
 
     auto* root_layout = new QVBoxLayout(this);
     root_layout->setContentsMargins(1, 1, 1, 1);
@@ -131,6 +136,111 @@ Context_Popup::Context_Popup(
     refresh_statusline();
 }
 
+namespace
+{
+const int Resize_Grip_Size = 16;
+}
+
+bool Context_Popup::in_resize_grip(const QPoint& position) const
+{
+    return position.x() >= width() - Resize_Grip_Size &&
+        position.y() >= height() - Resize_Grip_Size;
+}
+
+void Context_Popup::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton &&
+        in_resize_grip(event->position().toPoint()))
+    {
+        resizing_ = true;
+        resize_origin_ = event->globalPosition().toPoint();
+        resize_start_size_ = size();
+        event->accept();
+        return;
+    }
+    QFrame::mousePressEvent(event);
+}
+
+void Context_Popup::mouseMoveEvent(QMouseEvent* event)
+{
+    setCursor(
+        in_resize_grip(event->position().toPoint()) || resizing_
+            ? Qt::SizeFDiagCursor
+            : Qt::ArrowCursor);
+
+    if (!resizing_)
+    {
+        QFrame::mouseMoveEvent(event);
+        return;
+    }
+
+    const QPoint delta = event->globalPosition().toPoint() - resize_origin_;
+    int new_width = resize_start_size_.width() + delta.x();
+    int new_height = resize_start_size_.height() + delta.y();
+    const QWidget* host = parentWidget();
+    if (host != nullptr)
+    {
+        new_width = qMin(new_width, host->width() - x());
+        new_height = qMin(new_height, host->height() - y());
+    }
+    resize(
+        qMax(minimumSizeHint().width(), new_width),
+        qMax(minimumSizeHint().height(), new_height));
+    user_sized_ = true;
+    event->accept();
+}
+
+void Context_Popup::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (resizing_ && event->button() == Qt::LeftButton)
+    {
+        resizing_ = false;
+        event->accept();
+        return;
+    }
+    QFrame::mouseReleaseEvent(event);
+}
+
+void Context_Popup::paintEvent(QPaintEvent* event)
+{
+    QFrame::paintEvent(event);
+
+    /* Three diagonal ticks marking the drag corner. */
+    QPainter painter(this);
+    QColor tick = palette().color(QPalette::WindowText);
+    tick.setAlpha(140);
+    painter.setPen(QPen(tick, 1));
+    for (int offset = 3; offset <= 11; offset += 4)
+    {
+        painter.drawLine(
+            width() - offset,
+            height() - 2,
+            width() - 2,
+            height() - offset);
+    }
+}
+
+QSize Context_Popup::compact_size_limit() const
+{
+    /*
+     * The popup shows all of its content by default: it grows to the
+     * layout's hint so nothing is clipped or hidden behind a scroll bar,
+     * whatever font Neovim is using. The only bound is the editor surface
+     * itself, and the user can drag the bottom-right corner from there.
+     * The acceptance smoke and the theme tests assert against this same
+     * limit so the three can never drift.
+     */
+    const QSize hint = sizeHint();
+    const QWidget* host = parentWidget();
+    if (host == nullptr)
+    {
+        return hint;
+    }
+    return QSize(
+        qMin(hint.width(), host->width()),
+        qMin(hint.height(), host->height()));
+}
+
 void Context_Popup::project_to(
     QWidget* shell,
     const QRect& anchor_rect,
@@ -161,13 +271,25 @@ void Context_Popup::project_to(
     if (layout() != nullptr)
         layout()->activate();
     const QSize hint = sizeHint();
-    const int maximum_width = qMin(520, available.width());
-    const int maximum_height = qMin(420, available.height());
+    /*
+     * Show everything by default. The popup may be wider than the space
+     * beside the cursor -- a wide monospace face makes that common -- and
+     * that is preferred over clipping a field or hiding it behind a
+     * scroll bar. A user-dragged size wins until the popup closes.
+     */
+    const int maximum_width = qMin(hint.width(), available.width());
+    const int maximum_height = qMin(hint.height(), available.height());
     const int minimum_width = qMin(360, maximum_width);
     const int minimum_height = qMin(180, maximum_height);
-    const QSize popup_size(
+    QSize popup_size(
         qBound(minimum_width, hint.width(), maximum_width),
         qBound(minimum_height, hint.height(), maximum_height));
+    if (user_sized_)
+    {
+        popup_size = QSize(
+            qBound(minimum_width, width(), available.width()),
+            qBound(minimum_height, height(), available.height()));
+    }
 
     QRect anchor = anchor_rect;
     if (!anchor.isValid() || anchor.isEmpty())

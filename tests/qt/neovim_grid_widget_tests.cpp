@@ -1,11 +1,15 @@
+#include "neovim_font_names.h"
 #include "neovim_grid_widget.h"
 #include "neovim_input_translation.h"
 
 #include <QApplication>
 #include <QDebug>
+#include <QFontDatabase>
 #include <QImage>
 #include <QVariantList>
 #include <QVariantMap>
+
+#include <string.h>
 
 using Kalam::Editor::Mouse_Translation;
 using Kalam::Editor::Neovim_Grid_Widget;
@@ -158,6 +162,61 @@ void test_input_notation_table()
         literal_input_escaped(QStringLiteral("a<b><c")) ==
             QStringLiteral("a<lt>b><lt>c"),
         QStringLiteral("every '<' in literal text is escaped"));
+}
+
+/*
+ * Terminals spell Nerd Fonts the way GDI does ("IosevkaTerm NF"); Qt only
+ * knows the typographic name ("IosevkaTerm Nerd Font") and silently
+ * substitutes a default for anything it cannot match. The shell bridges
+ * the two so a guifont copied from a terminal config actually applies.
+ */
+void test_guifont_family_resolution()
+{
+    /* The abbreviation mapping is pure and testable without any fonts. */
+    check(
+        Kalam::Editor::neovim_expand_gdi_font_abbreviation(
+            QStringLiteral("IosevkaTerm NF")) ==
+            QStringLiteral("IosevkaTerm Nerd Font"),
+        QStringLiteral("' NF' expands to ' Nerd Font'"));
+    check(
+        Kalam::Editor::neovim_expand_gdi_font_abbreviation(
+            QStringLiteral("IosevkaTerm NFM")) ==
+            QStringLiteral("IosevkaTerm Nerd Font Mono"),
+        QStringLiteral("' NFM' expands to ' Nerd Font Mono'"));
+    check(
+        Kalam::Editor::neovim_expand_gdi_font_abbreviation(
+            QStringLiteral("IosevkaTerm NFP")) ==
+            QStringLiteral("IosevkaTerm Nerd Font Propo"),
+        QStringLiteral("' NFP' expands to ' Nerd Font Propo'"));
+    check(
+        Kalam::Editor::neovim_expand_gdi_font_abbreviation(
+            QStringLiteral("Cascadia Code")) ==
+            QStringLiteral("Cascadia Code"),
+        QStringLiteral("a name without an abbreviation is unchanged"));
+    /* "NF" must be a suffix, never a substring hit. */
+    check(
+        Kalam::Editor::neovim_expand_gdi_font_abbreviation(
+            QStringLiteral("NF Sans")) == QStringLiteral("NF Sans"),
+        QStringLiteral("a mid-name 'NF' is not expanded"));
+
+    /* An unknown family is returned as asked, with a warning, not a crash. */
+    const QString unknown = QStringLiteral("Definitely Not Installed 12345");
+    check(
+        Kalam::Editor::neovim_resolve_font_family(unknown) == unknown,
+        QStringLiteral("an unknown family is returned unchanged"));
+
+    /*
+     * When a font database is present (a real platform plugin, not
+     * offscreen), an installed family must resolve to itself.
+     */
+    const QStringList available = QFontDatabase::families();
+    if (!available.isEmpty())
+    {
+        check(
+            Kalam::Editor::neovim_resolve_font_family(available.first()) ==
+                available.first(),
+            QStringLiteral("an installed family resolves to itself"));
+    }
 }
 
 void test_mouse_translation()
@@ -404,6 +463,7 @@ int main(int argument_count, char** arguments)
     application.setQuitOnLastWindowClosed(false);
 
     test_input_notation_table();
+    test_guifont_family_resolution();
     test_mouse_translation();
     test_render_fixture();
     test_cursor_geometry();

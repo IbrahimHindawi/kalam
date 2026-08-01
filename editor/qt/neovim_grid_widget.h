@@ -69,6 +69,14 @@ protected:
     void inputMethodEvent(QInputMethodEvent* event) override;
     bool event(QEvent* event) override;
 
+    /*
+     * Neovim owns Tab and Shift-Tab. Qt consumes them for focus traversal
+     * inside QWidget::event() before keyPressEvent runs, which would move
+     * focus to an off-screen widget and strand the cursor. Refusing
+     * traversal lets both keys fall through to keyPressEvent.
+     */
+    bool focusNextPrevChild(bool next) override;
+
 private:
     QPointer<Neovim_Rpc_Client> client_;
     Neovim_Grid_Model model_;

@@ -633,6 +633,17 @@ void run_real_neovim_golden(const QString& neovim_program)
     ui_options.insert(QStringLiteral("rgb"), true);
     ui_options.insert(QStringLiteral("ext_linegrid"), true);
     ui_options.insert(QStringLiteral("ext_multigrid"), true);
+
+    /*
+     * A user's init.lua sets 'guifont' before any UI attaches, so the
+     * value must arrive with the attach-time option_set burst rather than
+     * only on later changes.
+     */
+    client->call(
+        QByteArrayLiteral("nvim_command"),
+        QVariantList()
+            << QByteArrayLiteral("set guifont=IosevkaTerm\\ NF:h10"));
+
     client->call(
         QByteArrayLiteral("nvim_ui_attach"),
         QVariantList() << 60 << 12 << ui_options);
@@ -644,6 +655,12 @@ void run_real_neovim_golden(const QString& neovim_program)
                 flush_count > 0;
         }),
         QStringLiteral("attaching resizes the grid and flushes"));
+
+    check(
+        model.guifont().contains(QStringLiteral("Iosevka")),
+        QStringLiteral("a guifont set before attach arrives with the "
+                       "attach-time options (model reports '%1')")
+            .arg(model.guifont()));
 
     client->call(
         QByteArrayLiteral("nvim_input"),
@@ -739,6 +756,22 @@ void run_real_neovim_golden(const QString& neovim_program)
                 first.width() > 10 && second.width() > 10;
         }),
         QStringLiteral("win_pos places both split windows disjointly"));
+
+    /*
+     * 'guifont' must reach the UI: kalam is the GUI, so this option is the
+     * only way Neovim can state which font the grid should use.
+     */
+    client->call(
+        QByteArrayLiteral("nvim_command"),
+        QVariantList()
+            << QByteArrayLiteral("set guifont=IosevkaTerm\\ NF:h10"));
+    check(
+        spin_until([&]()
+        {
+            return model.guifont().contains(QStringLiteral("Iosevka"));
+        }),
+        QStringLiteral("setting guifont reaches the UI (model reports '%1')")
+            .arg(model.guifont()));
 
     client->call(
         QByteArrayLiteral("nvim_command"),

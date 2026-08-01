@@ -65,6 +65,14 @@ public:
         Neovim_Rpc_Client* client,
         QObject* parent = nullptr);
 
+    /*
+     * The font the Neovim grid actually renders with. Qt surfaces adopt it
+     * whenever 'guifont' is unset, so the context popup and generated form
+     * always match the editor text instead of falling back to the Qt
+     * default.
+     */
+    void set_editor_font(const QFont& font);
+
     static Neovim_Theme theme_from_payload(
         const QVariantMap& payload,
         const QPalette& fallback_palette,

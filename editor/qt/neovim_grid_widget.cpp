@@ -3,6 +3,7 @@
 #include "neovim_input_translation.h"
 #include "neovim_rpc_client.h"
 
+#include <QFontDatabase>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
@@ -26,7 +27,18 @@ const int Minimum_Grid_Rows = 3;
 
 QFont default_grid_font()
 {
-    QFont font(QStringLiteral("Consolas"), 11);
+    /*
+     * Kalam is the GUI, so it owns the grid font until Neovim states one
+     * with 'guifont'. Start from the system's preferred fixed-pitch face
+     * rather than a hardcoded family, so the default tracks the machine
+     * instead of one developer's taste.
+     */
+    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    if (font.family().isEmpty())
+    {
+        font.setFamily(QStringLiteral("Consolas"));
+    }
+    font.setPointSize(11);
     font.setStyleHint(QFont::Monospace);
     font.setFixedPitch(true);
     font.setKerning(false);
@@ -596,6 +608,12 @@ void Neovim_Grid_Widget::send_text_input(const QString& notation)
     client_->call(
         QByteArrayLiteral("nvim_input"),
         QVariantList() << notation.toUtf8());
+}
+
+bool Neovim_Grid_Widget::focusNextPrevChild(bool next)
+{
+    Q_UNUSED(next);
+    return false;
 }
 
 void Neovim_Grid_Widget::keyPressEvent(QKeyEvent* event)

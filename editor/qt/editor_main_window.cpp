@@ -1635,8 +1635,10 @@ void Editor_Main_Window::run_smoke_step()
             focused != context_popup_ ||
             !context_popup_->has_modal_selection() ||
             cell.height() <= 0 ||
-            context_popup_->width() > 520 ||
-            context_popup_->height() > 420 ||
+            context_popup_->width() >
+                context_popup_->compact_size_limit().width() ||
+            context_popup_->height() >
+                context_popup_->compact_size_limit().height() ||
             shell_->height() - context_popup_->geometry().bottom() <
                 2 * cell.height() ||
             statusline == nullptr ||

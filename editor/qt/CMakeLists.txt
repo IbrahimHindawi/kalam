@@ -29,6 +29,8 @@ set(
     generated_form.h
     neovim_grid_model.cpp
     neovim_grid_model.h
+    neovim_font_names.cpp
+    neovim_font_names.h
     neovim_grid_widget.cpp
     neovim_grid_widget.h
     neovim_input_translation.cpp

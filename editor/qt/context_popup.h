@@ -26,6 +26,13 @@ public:
         const QVector<Author_Value_Owned>& values,
         QWidget* parent = nullptr);
 
+    /*
+     * The compact bound the popup keeps itself within, expressed in
+     * characters of the current font. The acceptance smoke asserts against
+     * this so the check follows the editor font instead of magic pixels.
+     */
+    QSize compact_size_limit() const;
+
     void project_to(
         QWidget* shell,
         const QRect& anchor_rect,
@@ -54,6 +61,16 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+
+    /*
+     * The bottom-right corner is a resize grip. The popup is a child of
+     * the editor surface, not a top-level window, so QSizeGrip cannot be
+     * used and the drag is handled here.
+     */
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
@@ -68,6 +85,13 @@ private:
     bool dirty_ = false;
     bool busy_ = false;
 
+    /* Mouse resize state; user_sized_ pins the size against re-projection. */
+    bool user_sized_ = false;
+    bool resizing_ = false;
+    QPoint resize_origin_;
+    QSize resize_start_size_;
+
+    bool in_resize_grip(const QPoint& position) const;
     bool handle_key(QKeyEvent* event, bool from_control);
     void enter_mode(const QByteArray& mode);
     void execute_command();
