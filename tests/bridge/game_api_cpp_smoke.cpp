@@ -17,7 +17,7 @@ struct Types_Are_Equal<Value, Value>
 
 static_assert(sizeof(Game_Result) == 4, "Game_Result size");
 static_assert(Host_API_Version == 1, "host API version is ABI");
-static_assert(Game_API_Version == 1, "game API version is ABI");
+static_assert(Game_API_Version == 2, "game API version is ABI");
 static_assert(Game_Result_Ok == 0, "result values are ABI");
 static_assert(Game_Result_Internal_Error == 6, "result values are ABI");
 static_assert(Game_Key_Count == 256, "key count is ABI");
@@ -67,8 +67,8 @@ static_assert(offsetof(Game_Input, wheel_delta) == 3200, "input wheel offset");
 static_assert(sizeof(Game_Input) == 3208, "input size");
 static_assert(alignof(Game_Input) == 8, "input alignment");
 
-static_assert(sizeof(Game_Viewport_Interaction) == 40, "viewport interaction size");
-static_assert(alignof(Game_Viewport_Interaction) == 4, "viewport interaction alignment");
+static_assert(sizeof(Game_Viewport_Interaction) == 56, "viewport interaction size");
+static_assert(alignof(Game_Viewport_Interaction) == 8, "viewport interaction alignment");
 static_assert(offsetof(Game_Viewport_Interaction_Result, value) == 32, "viewport result value offset");
 static_assert(sizeof(Game_Viewport_Interaction_Result) == 80, "viewport result size");
 static_assert(alignof(Game_Viewport_Interaction_Result) == 8, "viewport result alignment");

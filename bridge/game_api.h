@@ -10,7 +10,14 @@ typedef uint32_t Game_Result;
 enum
 {
     Host_API_Version = 1,
-    Game_API_Version = 1
+    /*
+     * Version 2 adds Game_Viewport_Interaction_Highlight and the
+     * highlight target fields appended to Game_Viewport_Interaction. The
+     * addition is struct_size-guarded, so a version-1 module still loads
+     * under a version-2 host and simply reports the highlight kind
+     * unsupported.
+     */
+    Game_API_Version = 2
 };
 
 enum
@@ -252,7 +259,17 @@ enum
     Game_Viewport_Interaction_Gizmo_Update = 3,
     Game_Viewport_Interaction_Gizmo_Commit = 4,
     Game_Viewport_Interaction_Gizmo_Cancel = 5,
-    Game_Viewport_Interaction_Clear_Selection = 6
+    Game_Viewport_Interaction_Clear_Selection = 6,
+
+    /*
+     * Source to selection (docs/entity_documents.md section 6). The editor
+     * names an object directly instead of a pixel; the module tints it.
+     * Highlight state is per-frame editor input, never authored state, and
+     * never survives a reload. Game_API_Version 2 and later; a version-1
+     * module reports Unsupported_Schema and the editor degrades to no
+     * highlight.
+     */
+    Game_Viewport_Interaction_Highlight = 7
 };
 
 typedef struct Game_Viewport_Interaction
@@ -269,6 +286,14 @@ typedef struct Game_Viewport_Interaction
     uint32_t viewport_height;
     uint32_t flags;
     uint32_t reserved;
+
+    /*
+     * Highlight target, appended for Game_API_Version 2. Read only when
+     * kind is Highlight and struct_size covers these fields; a zero
+     * document_id clears the highlight.
+     */
+    Author_Document_Id highlight_document_id;
+    Author_Object_Id highlight_object_id;
 } Game_Viewport_Interaction;
 
 enum

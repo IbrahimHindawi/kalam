@@ -105,6 +105,7 @@ private:
     int smoke_context_phase_ = 0;
     qsizetype smoke_context_initial_field_ = 0;
     bool close_authorized_ = false;
+    bool project_scanned_ = false;
     bool shutting_down_ = false;
 
     void wire_editor();
@@ -135,6 +136,7 @@ private:
     void focus_viewport();
     void toggle_viewport();
     void update_viewport_overlay();
+    void scan_project_documents();
     void handle_viewport_interaction(
         const Viewport_Interaction_Result& result);
     void handle_selection_context(

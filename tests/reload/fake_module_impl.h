@@ -23,6 +23,8 @@
 #define KALAM_RELOAD_FAKE_FAILURE_APPLY 7
 #define KALAM_RELOAD_FAKE_FAILURE_NEGOTIATION 8
 #define KALAM_RELOAD_FAKE_FAILURE_SCHEMA_FIELD 9
+/* Not a failure: an older module the host must still accept. */
+#define KALAM_RELOAD_FAKE_OLDER_API_VERSION 10
 
 typedef struct Reload_Fake_State
 {
@@ -386,6 +388,8 @@ game_get_api(
 
 #if KALAM_RELOAD_FAKE_FAILURE == KALAM_RELOAD_FAKE_FAILURE_API_VERSION
     out_api->api_version = Game_API_Version + 1;
+#elif KALAM_RELOAD_FAKE_FAILURE == KALAM_RELOAD_FAKE_OLDER_API_VERSION
+    out_api->api_version = 1;
 #elif KALAM_RELOAD_FAKE_FAILURE == KALAM_RELOAD_FAKE_FAILURE_API_SIZE
     out_api->struct_size =
         (uint32_t)(sizeof(Game_API) - sizeof(out_api->preview_author_field));

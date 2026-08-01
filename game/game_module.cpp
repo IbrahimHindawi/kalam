@@ -26,6 +26,11 @@ typedef struct Game_Instance
     uint32_t selection_active;
     uint32_t gizmo_active;
     uint32_t gizmo_axis;
+
+    /* Per-frame editor highlight; never authored state. */
+    Author_Document_Id highlight_document_id;
+    Author_Object_Id highlight_object_id;
+    uint32_t highlight_active;
 } Game_Instance;
 
 static void
@@ -383,6 +388,8 @@ game_render(
     render_target.height = target->height;
     render_target.generation = target->generation;
 
+    const Authored_Document* scene_document =
+        authored_world_latest_scene_document(game->authored_world);
     scene = authored_world_latest_scene(game->authored_world);
     post_process =
         authored_world_latest_post_process(game->authored_world);
@@ -424,6 +431,26 @@ game_render(
             scene->cube_transform.scale,
             sizeof(cube.scale));
         memcpy(cube.color, scene->cube_color, sizeof(cube.color));
+
+        /*
+         * Cursor-driven highlight (docs/entity_documents.md section 6).
+         * A per-frame editor tint over the authored color; the authored
+         * value is never touched and the tint never survives a reload.
+         */
+        if (game->highlight_active != 0 &&
+            scene_document != 0 &&
+            scene_document->document_id == game->highlight_document_id &&
+            (scene_document->root_object_id == game->highlight_object_id ||
+             scene_document->primary_object_id ==
+                 game->highlight_object_id))
+        {
+            uint32_t channel = 0;
+            for (channel = 0; channel < 3; channel += 1)
+            {
+                cube.color[channel] =
+                    cube.color[channel] * 0.55f + 0.45f;
+            }
+        }
         cube.draw_transform_gizmo = game->selection_active;
 
         renderer_result = module_renderer_render_cube(
@@ -531,6 +558,30 @@ game_viewport_interaction(
         game_clear_selection(game);
         game_fill_viewport_result(game, out_result);
         out_result->flags |= Game_Viewport_Result_Selection_Changed;
+        return Game_Result_Ok;
+    }
+
+    /*
+     * Highlight is independent of selection: the cursor may sit on an
+     * object the user has not picked. Guarded by struct_size so a
+     * version-1 caller never reaches the appended fields.
+     */
+    if (interaction->kind == Game_Viewport_Interaction_Highlight)
+    {
+        if (interaction->struct_size <
+            (uint32_t)sizeof(Game_Viewport_Interaction))
+        {
+            return game_fail(
+                Game_Result_Invalid_Argument,
+                "highlight requires the version 2 interaction descriptor",
+                "",
+                out_error);
+        }
+        game->highlight_document_id = interaction->highlight_document_id;
+        game->highlight_object_id = interaction->highlight_object_id;
+        game->highlight_active =
+            interaction->highlight_document_id != 0 ? 1u : 0u;
+        game_fill_viewport_result(game, out_result);
         return Game_Result_Ok;
     }
 

@@ -10,6 +10,7 @@
 #include "generated_form.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QCloseEvent>
 #include <QDoubleSpinBox>
 #include <QFile>
@@ -75,6 +76,19 @@ Editor_Main_Window::Editor_Main_Window(
     {
         neovim_->open_file(configuration_.initial_file);
     }
+    /*
+     * The project registry loads every authored file, not only the ones a
+     * buffer has open (docs/entity_documents.md section 4). The scan runs
+     * once the module can accept documents.
+     */
+    connect(
+        runtime_host_,
+        &Editor_Runtime_Host::moduleReloaded,
+        this,
+        [this](quint64)
+        {
+            scan_project_documents();
+        });
 
     if (QFileInfo::exists(configuration_.canonical_module_dll))
     {
@@ -128,6 +142,28 @@ void Editor_Main_Window::wire_editor()
         &Neovim_Grid_Widget::gridLayoutChanged,
         this,
         &Editor_Main_Window::update_viewport_overlay);
+    /*
+     * Source to selection (docs/entity_documents.md section 6): the
+     * cursor's enclosing object lights up in the viewport. A module older
+     * than Game_API_Version 2 simply shows no highlight.
+     */
+    connect(
+        neovim_,
+        &Editor_Neovim_Adapter::cursorContextChanged,
+        this,
+        [this](const QString& path, const QString&)
+        {
+            const Author_Document_Id document_id =
+                Editor_Runtime_Host::document_id_for_relative_path(
+                    QDir::fromNativeSeparators(
+                        QDir(configuration_.source_root)
+                            .relativeFilePath(path)));
+            const Document_Handle handle =
+                runtime_host_->document_by_id(document_id);
+            runtime_host_->highlight_object(
+                handle.is_valid() ? document_id : 0,
+                handle.is_valid() ? handle.root_object_id : 0);
+        });
     connect(
         neovim_,
         &Editor_Neovim_Adapter::viewportWindowsChanged,
@@ -1042,6 +1078,47 @@ QVector<Author_Value_Owned> Editor_Main_Window::read_form_values(
     return values;
 }
 
+void Editor_Main_Window::scan_project_documents()
+{
+    if (project_scanned_)
+    {
+        return;
+    }
+    project_scanned_ = true;
+
+    QVector<Editor_Runtime_Host::Registry_Diagnostic> registry_diagnostics;
+    const int applied =
+        runtime_host_->scan_project_documents(&registry_diagnostics);
+
+    if (!registry_diagnostics.isEmpty())
+    {
+        QVector<Diagnostic> quickfix;
+        quickfix.reserve(registry_diagnostics.size());
+        for (const Editor_Runtime_Host::Registry_Diagnostic& entry :
+             registry_diagnostics)
+        {
+            Diagnostic diagnostic;
+            diagnostic.file = entry.path;
+            diagnostic.line = 1;
+            diagnostic.column = 1;
+            diagnostic.type = QStringLiteral("error");
+            diagnostic.message = entry.message;
+            quickfix.push_back(diagnostic);
+        }
+        neovim_->set_quickfix(
+            quickfix,
+            QStringLiteral("kalam project documents"),
+            false);
+    }
+    if (applied > 0)
+    {
+        neovim_->notify_user(
+            QStringLiteral("kalam: loaded %1 project document(s)")
+                .arg(applied),
+            false);
+    }
+}
+
 void Editor_Main_Window::update_viewport_overlay()
 {
     const QRect cells =
@@ -1097,6 +1174,20 @@ void Editor_Main_Window::handle_viewport_interaction(
         const QString source_path = runtime_host_->source_path_for_object(
             result.document_id,
             result.object_id);
+
+        /*
+         * Selection to source (docs/entity_documents.md section 5): the
+         * picked object's document resolves back to its file, and the
+         * cursor lands on the object's key. Opening is a cursor move; the
+         * context popup stays an explicit :kalam edit context away.
+         */
+        const QString file_path =
+            runtime_host_->file_path_for_document(result.document_id);
+        if (!file_path.isEmpty())
+        {
+            neovim_->open_document_at_json_path(file_path, source_path);
+        }
+
         if (selection_document_.is_valid() && !source_path.isEmpty())
         {
             selection_context_request_id_ =

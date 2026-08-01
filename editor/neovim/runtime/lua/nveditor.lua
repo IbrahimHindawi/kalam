@@ -1161,6 +1161,104 @@ function M.viewport_bufnr()
   return bufnr
 end
 
+-- Source to selection (docs/entity_documents.md section 6): the cursor's
+-- enclosing top-level object is reported so the viewport can highlight it.
+-- Debounced, and only when the enclosing object actually changes.
+local cursor_context_last = nil
+local cursor_context_generation = 0
+
+-- The enclosing top-level object is what a highlight targets; moving
+-- between fields of one object must not re-notify.
+function M.cursor_highlight_target(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return nil
+  end
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if name == "" or not name:match("%.json$") then
+    return nil
+  end
+
+  local context = M.cursor_context(bufnr)
+  if context == nil or type(context.json_path) ~= "string" then
+    return nil
+  end
+  local enclosing = context.json_path:match("^%$%.[%w_]+") or "$"
+  return { path = name, json_path = enclosing }
+end
+
+local function notify_cursor_context(bufnr)
+  local target = M.cursor_highlight_target(bufnr)
+  if target == nil then
+    return
+  end
+  local signature = target.path .. "\0" .. target.json_path
+  if signature == cursor_context_last then
+    return
+  end
+  cursor_context_last = signature
+  rpc_notify("nveditor.cursor_context", target)
+end
+
+local function schedule_cursor_context(bufnr)
+  cursor_context_generation = cursor_context_generation + 1
+  local generation = cursor_context_generation
+  vim.defer_fn(function()
+    if generation == cursor_context_generation
+        and vim.api.nvim_buf_is_valid(bufnr) then
+      notify_cursor_context(bufnr)
+    end
+  end, tonumber(vim.g.nveditor_cursor_debounce_ms) or 120)
+end
+
+-- Opens a project document and places the cursor on the key at json_path
+-- (docs/entity_documents.md section 5). A cursor move only: no mode
+-- change, no popup. Returns the zero-based row and column it landed on.
+function M.open_at_json_path(path, json_path)
+  if type(path) ~= "string" or path == "" then
+    return nil, "invalid document path"
+  end
+
+  -- Prefer a window already showing the file so a viewport pick never
+  -- steals the layout the user arranged.
+  local absolute = vim.fn.fnamemodify(path, ":p")
+  local target_window = nil
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buffer = vim.api.nvim_win_get_buf(win)
+    local name = vim.api.nvim_buf_get_name(buffer)
+    if name ~= "" and vim.fn.fnamemodify(name, ":p") == absolute then
+      target_window = win
+      break
+    end
+  end
+  if target_window ~= nil then
+    vim.api.nvim_set_current_win(target_window)
+  else
+    local ok, edit_error = pcall(vim.cmd.edit, vim.fn.fnameescape(path))
+    if not ok then
+      return nil, tostring(edit_error)
+    end
+  end
+
+  if type(json_path) ~= "string" or json_path == "" then
+    return { row = 0, column = 0 }
+  end
+
+  local context = M.context_for_path(0, json_path)
+  if context == nil then
+    return { row = 0, column = 0 }
+  end
+
+  local row = (context.start_row or 0) + 1
+  local column = context.start_column or 0
+  local line_count = vim.api.nvim_buf_line_count(0)
+  if row > line_count then
+    row = line_count
+  end
+  pcall(vim.api.nvim_win_set_cursor, 0, { row, column })
+  return { row = context.start_row or 0, column = column }
+end
+
 function M.viewport_open()
   local bufnr = M.viewport_bufnr()
   local existing = viewport_windows_in_tab()
@@ -1490,6 +1588,15 @@ function M.setup()
     group = group,
     callback = function(args)
       debounce_generation[args.buf] = nil
+    end,
+  })
+
+  -- Cursor to highlight (docs/entity_documents.md section 6).
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorHold" }, {
+    group = group,
+    pattern = "*.json",
+    callback = function(args)
+      schedule_cursor_context(args.buf)
     end,
   })
 

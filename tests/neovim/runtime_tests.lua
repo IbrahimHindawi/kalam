@@ -234,6 +234,46 @@ check(
   "lowercase :kalam cmdline abbreviation is installed"
 )
 
+-- Selection to source: open a document and land on a key
+-- (docs/entity_documents.md section 5).
+local open_result, open_error =
+  nveditor.open_at_json_path(first_open_path, "$.cube.color")
+check(
+  open_result ~= nil and open_error == nil,
+  "open_at_json_path opens the document"
+)
+check(
+  vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
+    == vim.fn.fnamemodify(first_open_path, ":p"),
+  "open_at_json_path lands in the requested document"
+)
+if open_result ~= nil then
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  check(
+    cursor[1] == open_result.row + 1 and cursor[2] == open_result.column,
+    "the cursor sits on the reported key position"
+  )
+  local key_line = vim.api.nvim_buf_get_lines(
+    0,
+    open_result.row,
+    open_result.row + 1,
+    false
+  )[1]
+  check(
+    key_line ~= nil and key_line:match("color") ~= nil,
+    "the cursor line holds the requested key (got '"
+      .. tostring(key_line) .. "')"
+  )
+end
+check(
+  vim.api.nvim_get_mode().mode:sub(1, 1) == "n",
+  "opening at a key never changes mode"
+)
+check(
+  select(1, nveditor.open_at_json_path("", "$.cube")) == nil,
+  "an empty document path is refused"
+)
+
 -- The kalam://viewport buffer contract
 -- (docs/buffer_hosted_viewport.md section 3).
 local viewport_events = {}

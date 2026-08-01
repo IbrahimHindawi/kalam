@@ -117,6 +117,26 @@ void Editor_Neovim_Adapter::open_file_location(
         argument);
 }
 
+void Editor_Neovim_Adapter::open_document_at_json_path(
+    const QString& path,
+    const QString& json_path)
+{
+    if (!is_ready() || path.isEmpty())
+    {
+        return;
+    }
+    QVariantMap argument;
+    argument.insert(
+        QStringLiteral("path"),
+        QFileInfo(path).absoluteFilePath());
+    argument.insert(QStringLiteral("json_path"), json_path);
+    call_lua(
+        QByteArrayLiteral(
+            "(function() return require('nveditor')"
+            ".open_at_json_path(_A.path,_A.json_path) end)()"),
+        argument);
+}
+
 quint64 Editor_Neovim_Adapter::request_context_for_path(
     qint64 buffer,
     const QString& json_path)
@@ -392,6 +412,12 @@ void Editor_Neovim_Adapter::handle_notification(
     else if (name == QByteArrayLiteral("nveditor.build_reload"))
     {
         emit buildReloadRequested();
+    }
+    else if (name == QByteArrayLiteral("nveditor.cursor_context"))
+    {
+        emit cursorContextChanged(
+            payload.value(QStringLiteral("path")).toString(),
+            payload.value(QStringLiteral("json_path")).toString());
     }
     else if (name == QByteArrayLiteral("nveditor.viewport_windows"))
     {

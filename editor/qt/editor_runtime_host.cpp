@@ -1,6 +1,8 @@
 #include "editor_runtime_host.h"
 
 #include <QDir>
+#include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -248,13 +250,25 @@ bool Editor_Runtime_Host::accept_valid_document(
     }
 
     Owned_Document candidate;
-    if (existing_index >= 0)
+    const QString relative_path = relative_path_for(snapshot.path);
+    const QByteArray relative_utf8 = relative_path.toUtf8();
+
+    /*
+     * Identity comes from the path, so the same file keeps its id across
+     * buffers, scans, and restarts (docs/entity_documents.md section 3).
+     * A file already loaded from disk is adopted by the buffer that opens
+     * it rather than duplicated.
+     */
+    const int path_index = document_index_for_relative_path(relative_utf8);
+    const int reuse_index = existing_index >= 0 ? existing_index : path_index;
+    if (reuse_index >= 0)
     {
-        candidate.handle = documents_.at(existing_index).handle;
+        candidate.handle = documents_.at(reuse_index).handle;
     }
     else
     {
-        candidate.handle.document_id = next_document_id_++;
+        candidate.handle.document_id =
+            document_id_for_relative_path(relative_path);
         candidate.handle.root_object_id = next_object_id_++;
     }
     candidate.handle.revision = next_revision_++;
@@ -263,12 +277,8 @@ bool Editor_Runtime_Host::accept_valid_document(
     candidate.handle.schema_id = schema_string.toUtf8();
     candidate.handle.path = snapshot.path;
     candidate.json_utf8 = snapshot.text_utf8;
-    const QString absolute_path = QFileInfo(snapshot.path).absoluteFilePath();
-    const QString relative_path = project_root_.isEmpty()
-        ? snapshot.path
-        : QDir(project_root_).relativeFilePath(absolute_path);
-    candidate.project_relative_path = QDir::fromNativeSeparators(relative_path)
-        .toUtf8();
+    candidate.project_relative_path = relative_utf8;
+    candidate.buffer_shadowed = true;
 
     if (has_callable_module())
     {
@@ -293,9 +303,9 @@ bool Editor_Runtime_Host::accept_valid_document(
         }
     }
 
-    if (existing_index >= 0)
+    if (reuse_index >= 0)
     {
-        documents_[existing_index] = candidate;
+        documents_[reuse_index] = candidate;
     }
     else
     {
@@ -553,6 +563,8 @@ bool Editor_Runtime_Host::viewport_interaction(
     Game_Viewport_Interaction interaction = {};
     interaction.struct_size = sizeof(interaction);
     interaction.kind = kind;
+    interaction.highlight_document_id = 0;
+    interaction.highlight_object_id = 0;
     interaction.pointer_x_pixels = physical_position.x();
     interaction.pointer_y_pixels = physical_position.y();
     interaction.pointer_delta_x_pixels = physical_delta.x();
@@ -978,6 +990,261 @@ QVector<Author_Document_State> Editor_Runtime_Host::borrow_documents()
         result.push_back(document.borrow());
     }
     return result;
+}
+
+bool Editor_Runtime_Host::highlight_object(
+    Author_Document_Id document_id,
+    Author_Object_Id object_id)
+{
+    if (!has_callable_module() ||
+        active_->api.viewport_interaction == nullptr)
+    {
+        return false;
+    }
+    /* A version-1 module has no highlight kind; degrade silently. */
+    if (active_->api.api_version < 2)
+    {
+        return false;
+    }
+
+    Game_Viewport_Interaction interaction = {};
+    interaction.struct_size = sizeof(interaction);
+    interaction.kind = Game_Viewport_Interaction_Highlight;
+    interaction.highlight_document_id = document_id;
+    interaction.highlight_object_id = object_id;
+
+    Game_Viewport_Interaction_Result borrowed_result = {};
+    Game_Error game_error = {};
+    const Game_Result result = active_->api.viewport_interaction(
+        active_->game,
+        &interaction,
+        &borrowed_result,
+        &game_error);
+    return result == Game_Result_Ok;
+}
+
+Author_Document_Id Editor_Runtime_Host::document_id_for_relative_path(
+    const QString& project_relative_path)
+{
+    /*
+     * FNV-1a over the normalized path, the same hash family as authored
+     * field ids (docs/entity_documents.md section 3). Paths are compared
+     * case-exactly so Windows' case-insensitive filesystem cannot mint two
+     * identities for one file; the caller normalizes separators.
+     */
+    const QByteArray bytes = project_relative_path.toUtf8();
+    quint64 hash = Q_UINT64_C(0xcbf29ce484222325);
+    for (char byte : bytes)
+    {
+        hash ^= static_cast<quint64>(static_cast<unsigned char>(byte));
+        hash *= Q_UINT64_C(0x100000001b3);
+    }
+    /* Id 0 is reserved for "no document". */
+    return hash == 0 ? 1 : hash;
+}
+
+QString Editor_Runtime_Host::relative_path_for(const QString& path) const
+{
+    const QString absolute_path = QFileInfo(path).absoluteFilePath();
+    const QString relative_path = project_root_.isEmpty()
+        ? path
+        : QDir(project_root_).relativeFilePath(absolute_path);
+    return QDir::fromNativeSeparators(relative_path);
+}
+
+QString Editor_Runtime_Host::file_path_for_document(
+    Author_Document_Id document_id) const
+{
+    const int index = document_index_for_id(document_id);
+    if (index < 0)
+    {
+        return QString();
+    }
+    const Owned_Document& document = documents_.at(index);
+    if (!document.handle.path.isEmpty())
+    {
+        return document.handle.path;
+    }
+    const QString relative_path =
+        QString::fromUtf8(document.project_relative_path);
+    return project_root_.isEmpty()
+        ? relative_path
+        : QDir(project_root_).absoluteFilePath(relative_path);
+}
+
+void Editor_Runtime_Host::release_buffer_shadow(qint64 buffer)
+{
+    const int index = document_index_for_buffer(buffer);
+    if (index >= 0)
+    {
+        documents_[index].buffer_shadowed = false;
+    }
+}
+
+int Editor_Runtime_Host::scan_project_documents(
+    QVector<Registry_Diagnostic>* out_diagnostics)
+{
+    if (project_root_.isEmpty())
+    {
+        return 0;
+    }
+
+    int applied = 0;
+    QDirIterator iterator(
+        project_root_,
+        QStringList() << QStringLiteral("*.json"),
+        QDir::Files,
+        QDirIterator::Subdirectories);
+    while (iterator.hasNext())
+    {
+        const QString path = iterator.next();
+        const QString relative_path = relative_path_for(path);
+
+        /* Build output and vendored sources are not authored content. */
+        if (relative_path.startsWith(QStringLiteral("build/")) ||
+            relative_path.startsWith(QStringLiteral("extern/")) ||
+            relative_path.startsWith(QStringLiteral("..")) ||
+            relative_path.endsWith(QStringLiteral("res.manifest.json")) ||
+            relative_path.contains(QStringLiteral("/node_modules/")))
+        {
+            continue;
+        }
+
+        /* An open buffer is authoritative; never re-read over it. */
+        const int existing = document_index_for_relative_path(
+            relative_path.toUtf8());
+        if (existing >= 0 && documents_.at(existing).buffer_shadowed)
+        {
+            continue;
+        }
+
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+        {
+            if (out_diagnostics != nullptr)
+            {
+                out_diagnostics->push_back(
+                    {path, QStringLiteral("could not open the document")});
+            }
+            continue;
+        }
+        const QByteArray json_utf8 = file.readAll();
+        file.close();
+
+        QString error;
+        if (apply_document_text(path, json_utf8, 0, 0, true, &error))
+        {
+            ++applied;
+        }
+        else if (out_diagnostics != nullptr && !error.isEmpty())
+        {
+            out_diagnostics->push_back({path, error});
+        }
+    }
+    return applied;
+}
+
+bool Editor_Runtime_Host::apply_document_text(
+    const QString& path,
+    const QByteArray& json_utf8,
+    qint64 buffer,
+    quint64 changedtick,
+    bool from_disk,
+    QString* error)
+{
+    QJsonParseError parse_error;
+    const QJsonDocument parsed =
+        QJsonDocument::fromJson(json_utf8, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError || !parsed.isObject())
+    {
+        if (error != nullptr)
+        {
+            *error = QStringLiteral("JSON validation mismatch: %1")
+                .arg(parse_error.errorString());
+        }
+        return false;
+    }
+    const QString schema_string =
+        parsed.object().value(QStringLiteral("$schema")).toString();
+    if (schema_string.isEmpty())
+    {
+        if (error != nullptr)
+        {
+            *error = QStringLiteral("document has no string $schema");
+        }
+        return false;
+    }
+
+    const QString relative_path = relative_path_for(path);
+    const QByteArray relative_utf8 = relative_path.toUtf8();
+    const int existing = document_index_for_relative_path(relative_utf8);
+
+    Owned_Document candidate;
+    if (existing >= 0)
+    {
+        candidate = documents_.at(existing);
+    }
+    else
+    {
+        candidate.handle.document_id =
+            document_id_for_relative_path(relative_path);
+        candidate.handle.root_object_id = next_object_id_++;
+    }
+    candidate.handle.revision = next_revision_++;
+    candidate.handle.buffer = from_disk ? candidate.handle.buffer : buffer;
+    candidate.handle.changedtick =
+        from_disk ? candidate.handle.changedtick : changedtick;
+    candidate.handle.schema_id = schema_string.toUtf8();
+    candidate.handle.path = path;
+    candidate.json_utf8 = json_utf8;
+    candidate.project_relative_path = relative_utf8;
+    candidate.buffer_shadowed = from_disk ? candidate.buffer_shadowed : true;
+
+    if (has_callable_module())
+    {
+        Author_Document_State state = candidate.borrow();
+        Game_Error game_error = {};
+        const Game_Result result = active_->api.apply_document(
+            active_->game,
+            &state,
+            &game_error);
+        if (result != Game_Result_Ok)
+        {
+            if (error != nullptr)
+            {
+                *error = game_error_text(
+                    result,
+                    game_error,
+                    QStringLiteral("module rejected the authored document"));
+            }
+            return false;
+        }
+    }
+
+    if (existing >= 0)
+    {
+        documents_[existing] = candidate;
+    }
+    else
+    {
+        documents_.push_back(candidate);
+    }
+    emit documentAccepted(candidate.handle);
+    return true;
+}
+
+int Editor_Runtime_Host::document_index_for_relative_path(
+    const QByteArray& project_relative_path) const
+{
+    for (qsizetype index = 0; index < documents_.size(); ++index)
+    {
+        if (documents_.at(index).project_relative_path ==
+            project_relative_path)
+        {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
 }
 
 int Editor_Runtime_Host::document_index_for_buffer(qint64 buffer) const

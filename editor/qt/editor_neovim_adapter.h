@@ -31,6 +31,14 @@ public:
         qint64 zero_based_row,
         qint64 zero_based_column);
 
+    /*
+     * Opens a project document and moves the cursor onto the key at
+     * json_path (docs/entity_documents.md section 5). A cursor move only.
+     */
+    void open_document_at_json_path(
+        const QString& path,
+        const QString& json_path);
+
     quint64 request_context_for_path(qint64 buffer, const QString& json_path);
     quint64 patch_text(
         const Source_Context& context,
@@ -58,6 +66,7 @@ signals:
     void toggleViewportRequested();
     void playRequested();
     void stopRequested();
+    void cursorContextChanged(QString path, QString json_path);
     void viewportWindowsChanged(
         QVector<qlonglong> windows,
         qlonglong active_window);

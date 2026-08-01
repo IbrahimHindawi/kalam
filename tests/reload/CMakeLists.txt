@@ -73,6 +73,11 @@ kalam_add_reload_fake(
     KALAM_RELOAD_FAKE_FAILURE=1
 )
 kalam_add_reload_fake(
+    reload_fake_older_version
+    fake_module_invalid.cpp
+    KALAM_RELOAD_FAKE_FAILURE=10
+)
+kalam_add_reload_fake(
     reload_fake_invalid_size
     fake_module_invalid.cpp
     KALAM_RELOAD_FAKE_FAILURE=2
@@ -138,6 +143,7 @@ add_dependencies(
     reload_fake_invalid_schema_duplicate
     reload_fake_invalid_schema_field
     reload_fake_invalid_apply
+    reload_fake_older_version
 )
 
 set(KALAM_RELOAD_HOT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/hot")
@@ -212,3 +218,39 @@ target_compile_definitions(
         PROPERTIES TIMEOUT 120
     )
 endif()
+
+add_executable(
+    reload_api_version_compat_tests
+    api_version_compat_tests.cpp
+)
+target_link_libraries(
+    reload_api_version_compat_tests
+    PRIVATE
+        reload_module_loader
+        kernel32
+)
+kalam_apply_engine_policy(reload_api_version_compat_tests)
+target_compile_definitions(
+    reload_api_version_compat_tests
+    PRIVATE
+        KALAM_TEST_PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
+)
+add_dependencies(
+    reload_api_version_compat_tests
+    reload_fake_older_version
+    reload_fake_invalid_version
+)
+add_test(
+    NAME reload.api_version_compatibility
+    COMMAND
+        reload_api_version_compat_tests
+        "${KALAM_RELOAD_HOT_DIRECTORY}"
+        "$<TARGET_FILE:reload_fake_older_version>"
+        "$<TARGET_FILE:reload_fake_invalid_version>"
+)
+set_tests_properties(
+    reload.api_version_compatibility
+    PROPERTIES
+        LABELS "reload"
+        TIMEOUT 30
+)

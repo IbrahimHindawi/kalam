@@ -5,7 +5,7 @@
 
 _Static_assert(sizeof(Game_Result) == 4, "Game_Result size");
 _Static_assert(Host_API_Version == 1, "host API version is ABI");
-_Static_assert(Game_API_Version == 1, "game API version is ABI");
+_Static_assert(Game_API_Version == 2, "game API version is ABI");
 _Static_assert(Game_Result_Ok == 0, "result values are ABI");
 _Static_assert(Game_Result_Internal_Error == 6, "result values are ABI");
 _Static_assert(Game_Key_Count == 256, "key count is ABI");
@@ -55,8 +55,8 @@ _Static_assert(offsetof(Game_Input, wheel_delta) == 3200, "input wheel offset");
 _Static_assert(sizeof(Game_Input) == 3208, "input size");
 _Static_assert(_Alignof(Game_Input) == 8, "input alignment");
 
-_Static_assert(sizeof(Game_Viewport_Interaction) == 40, "viewport interaction size");
-_Static_assert(_Alignof(Game_Viewport_Interaction) == 4, "viewport interaction alignment");
+_Static_assert(sizeof(Game_Viewport_Interaction) == 56, "viewport interaction size");
+_Static_assert(_Alignof(Game_Viewport_Interaction) == 8, "viewport interaction alignment");
 _Static_assert(offsetof(Game_Viewport_Interaction_Result, value) == 32, "viewport result value offset");
 _Static_assert(sizeof(Game_Viewport_Interaction_Result) == 80, "viewport result size");
 _Static_assert(_Alignof(Game_Viewport_Interaction_Result) == 8, "viewport result alignment");

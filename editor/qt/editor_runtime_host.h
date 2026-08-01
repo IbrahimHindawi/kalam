@@ -51,6 +51,36 @@ public:
     bool rehydrate_document(Author_Document_Id document_id, QString* error);
     Document_Handle document_for_buffer(qint64 buffer) const;
     Document_Handle document_by_id(Author_Document_Id document_id) const;
+
+    /*
+     * The project document registry (docs/entity_documents.md section 4).
+     * Every authored file under the project root is a live document,
+     * whether or not a buffer has it open; an open buffer shadows the disk
+     * copy until it closes.
+     */
+    struct Registry_Diagnostic
+    {
+        QString path;
+        QString message;
+    };
+
+    /*
+     * Scans the project root for authored JSON documents, applying every
+     * one that validates. Returns the count applied; diagnostics for files
+     * that failed are appended to out_diagnostics.
+     */
+    int scan_project_documents(
+        QVector<Registry_Diagnostic>* out_diagnostics);
+
+    /* The inverse the selection loop needs: identity back to its file. */
+    QString file_path_for_document(Author_Document_Id document_id) const;
+
+    /* Path-derived identity; the same hash family as authored field ids. */
+    static Author_Document_Id document_id_for_relative_path(
+        const QString& project_relative_path);
+
+    /* Releases a buffer's shadow so the disk copy governs again. */
+    void release_buffer_shadow(qint64 buffer);
     QString source_path_for_object(
         Author_Document_Id document_id,
         Author_Object_Id object_id) const;
@@ -71,6 +101,16 @@ public:
         Author_Field_Id field_id,
         const Author_Value_Owned& value,
         QString* error);
+    /*
+     * Source to selection (docs/entity_documents.md section 6). A zero
+     * document_id clears the highlight. Returns false when the loaded
+     * module predates Game_API_Version 2, which is not an error: the
+     * editor simply shows no highlight.
+     */
+    bool highlight_object(
+        Author_Document_Id document_id,
+        Author_Object_Id object_id);
+
     bool viewport_interaction(
         Game_Viewport_Interaction_Kind kind,
         const QPoint& physical_position,
@@ -128,6 +168,11 @@ private:
         QByteArray project_relative_path;
         QByteArray json_utf8;
         Author_Object_Source object_source = {};
+        /*
+         * An open buffer shadows the file on disk; a scan never overwrites
+         * a shadowed document (docs/entity_documents.md section 4).
+         */
+        bool buffer_shadowed = false;
 
         Author_Document_State borrow();
     };
@@ -167,6 +212,16 @@ private:
     QVector<Author_Document_State> borrow_documents();
     int document_index_for_buffer(qint64 buffer) const;
     int document_index_for_id(Author_Document_Id document_id) const;
+    int document_index_for_relative_path(
+        const QByteArray& project_relative_path) const;
+    QString relative_path_for(const QString& path) const;
+    bool apply_document_text(
+        const QString& path,
+        const QByteArray& json_utf8,
+        qint64 buffer,
+        quint64 changedtick,
+        bool from_disk,
+        QString* error);
     static QByteArray string_view_copy(String_View view);
     static QString game_error_text(
         Game_Result result,

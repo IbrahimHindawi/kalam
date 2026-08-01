@@ -699,12 +699,12 @@ wmain(int argument_count, wchar_t** arguments)
     reload_render_check(&context,
         loader_result == Game_Result_Ok &&
         color_value.kind == Author_Field_Color4 &&
-        color_value.data.f32[0] > 0.11999f &&
-        color_value.data.f32[0] < 0.12001f &&
-        color_value.data.f32[1] > 0.57999f &&
-        color_value.data.f32[1] < 0.58001f &&
-        color_value.data.f32[2] > 0.94999f &&
-        color_value.data.f32[2] < 0.95001f,
+        color_value.data.f32[0] > 0.79999f &&
+        color_value.data.f32[0] < 0.80001f &&
+        color_value.data.f32[1] > 0.19999f &&
+        color_value.data.f32[1] < 0.20001f &&
+        color_value.data.f32[2] > 0.09999f &&
+        color_value.data.f32[2] < 0.10001f,
         "real module must contain canonical cube.scene.json color");
 
     if (!reload_render_active_frame(&context, &baseline))

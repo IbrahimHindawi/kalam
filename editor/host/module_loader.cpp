@@ -1115,14 +1115,23 @@ module_loader_prepare(
     }
     memset(&game_error, 0, sizeof(game_error));
 
-    if (candidate->api.api_version != Game_API_Version)
+    /*
+     * Older-but-compatible modules load and degrade. Every version
+     * difference so far is a struct_size-guarded addition
+     * (docs/entity_documents.md section 6), so a version-1 module under a
+     * version-2 host works minus the newer interactions. A module newer
+     * than the host is still rejected: the host cannot honor calls it
+     * does not know about.
+     */
+    if (candidate->api.api_version == 0 ||
+        candidate->api.api_version > Game_API_Version)
     {
         result = module_loader_fail_literal(
             out_error,
             Module_Loader_Result_API_Version_Mismatch,
             Module_Loader_Stage_Validate_API,
             0,
-            "candidate Game_API version does not match the host");
+            "candidate Game_API version is not supported by the host");
         return module_loader_rollback_candidate(
             candidate,
             request,

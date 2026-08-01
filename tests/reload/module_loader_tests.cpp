@@ -503,6 +503,7 @@ wmain(int argument_count, wchar_t** arguments)
         arguments[Argument_Invalid_Version],
         Module_Loader_Result_API_Version_Mismatch,
         0);
+
     reload_test_failed_candidate(
         &context,
         arguments[Argument_Invalid_Size],
