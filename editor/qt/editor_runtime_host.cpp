@@ -906,6 +906,11 @@ void Editor_Runtime_Host::process_pending_reload()
     request.create_desc.d3d11_immediate_context = viewport_.immediate_context;
     request.create_desc.host_user = this;
     request.create_desc.host_log = &Editor_Runtime_Host::log_callback;
+    /* Borrowed for the create call only; the module copies nothing. */
+    const QByteArray project_root_utf8 = project_root_.toUtf8();
+    request.create_desc.project_root.data = project_root_utf8.constData();
+    request.create_desc.project_root.size =
+        static_cast<uint64_t>(project_root_utf8.size());
     request.documents = borrowed_documents.constData();
     request.document_count =
         static_cast<uint32_t>(borrowed_documents.size());

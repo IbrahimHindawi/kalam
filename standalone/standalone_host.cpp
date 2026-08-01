@@ -101,6 +101,14 @@ typedef struct Standalone_Host
     uint64_t fixed_update_count;
     uint64_t rendered_frame_count;
     uint64_t present_call_count;
+
+    /*
+     * UTF-8 project root for manifest resources. The shipping layout
+     * stages res/ beside the executable, so the root is the executable's
+     * directory (docs/resource_manifest.md section 5).
+     */
+    char project_root[Standalone_Path_Capacity];
+    uint32_t project_root_size;
 } Standalone_Host;
 
 static const wchar_t Standalone_Window_Class_Name[] =
@@ -933,6 +941,9 @@ standalone_load_game_module(
         host->viewport.immediate_context;
     request.create_desc.host_user = host;
     request.create_desc.host_log = standalone_host_log;
+    request.create_desc.project_root.data = host->project_root;
+    request.create_desc.project_root.size =
+        (uint64_t)host->project_root_size;
     request.documents = host->documents;
     request.document_count = host->document_count;
     request.clear_context_bindings =
@@ -1834,6 +1845,34 @@ standalone_run(int argument_count, wchar_t** arguments)
     }
     frame_scheduler_init(&host->scheduler);
     input_latch_init(&host->input);
+
+    /* res/ is staged beside the executable; that directory is the root. */
+    {
+        DWORD length = GetModuleFileNameA(
+            0,
+            host->project_root,
+            (DWORD)sizeof(host->project_root));
+        if (length == 0 || length >= sizeof(host->project_root))
+        {
+            fputs("Could not resolve the executable directory.\n", stderr);
+            HeapFree(GetProcessHeap(), 0, host);
+            return 1;
+        }
+        while (length > 0 &&
+               host->project_root[length - 1] != '\\' &&
+               host->project_root[length - 1] != '/')
+        {
+            --length;
+        }
+        while (length > 1 &&
+               (host->project_root[length - 1] == '\\' ||
+                host->project_root[length - 1] == '/'))
+        {
+            --length;
+        }
+        host->project_root[length] = 0;
+        host->project_root_size = (uint32_t)length;
+    }
 
     if (options.smoke)
     {

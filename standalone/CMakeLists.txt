@@ -41,3 +41,5 @@ kalam_apply_engine_policy(game)
 if(TARGET game_module)
     add_dependencies(game game_module)
 endif()
+
+kalam_stage_resources(game)

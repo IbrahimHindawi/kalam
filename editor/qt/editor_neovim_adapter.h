@@ -58,6 +58,9 @@ signals:
     void toggleViewportRequested();
     void playRequested();
     void stopRequested();
+    void viewportWindowsChanged(
+        QVector<qlonglong> windows,
+        qlonglong active_window);
     void validDocumentReceived(Kalam::Editor::Buffer_Snapshot snapshot);
     void invalidDocumentReceived(
         Kalam::Editor::Buffer_Snapshot snapshot,

@@ -1,0 +1,7 @@
+{
+  "$schema": "nveditor.res_manifest/v1",
+  "shaders": [
+    { "program": "fixture_basic", "source": "shaders/fixture_basic.hlsl" },
+    { "program": "fixture_basic", "source": "shaders/fixture_basic.hlsl" }
+  ]
+}

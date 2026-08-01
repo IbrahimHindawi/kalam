@@ -54,6 +54,7 @@ signals:
     void cursorRectangleChanged(QRect widget_rectangle);
     void titleChanged(QString title);
     void guifontChanged(QString guifont);
+    void gridLayoutChanged();
     void attached();
 
 protected:
@@ -77,6 +78,7 @@ private:
     int ascent_ = 1;
     bool attached_ = false;
     bool cursor_dirty_ = false;
+    bool layout_dirty_ = false;
     bool metrics_warning_reported_ = false;
     int last_sent_columns_ = 0;
     int last_sent_rows_ = 0;
@@ -90,8 +92,7 @@ private:
         const QByteArray& button,
         const QByteArray& action,
         const QByteArray& modifiers,
-        int row,
-        int column);
+        const QPoint& global_cell);
     QPoint cell_from_position(const QPointF& position) const;
     QRect cell_rectangle(int row, int column, int width_cells) const;
     QRegion damage_to_pixels(const QVector<QRect>& damage) const;

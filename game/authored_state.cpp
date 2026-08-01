@@ -1160,6 +1160,60 @@ authored_state_init(Authored_State* state)
 }
 
 Game_Result
+authored_document_parse(
+    const Author_Document_State* document,
+    Authored_Document* out_document,
+    Game_Error* out_error)
+{
+    Game_Result result = Game_Result_Ok;
+
+    authored_clear_error(out_error);
+    if (out_document == 0)
+    {
+        return authored_fail(
+            Game_Result_Invalid_Argument,
+            "invalid authored document destination",
+            "",
+            out_error);
+    }
+
+    result = authored_validate_document_boundary(document, out_error);
+    if (result != Game_Result_Ok)
+    {
+        return result;
+    }
+    result = authored_parse_document(document, out_document, out_error);
+    if (result != Game_Result_Ok)
+    {
+        return result;
+    }
+
+    if (!authored_view_equal_literal(
+            document->schema_id,
+            out_document->kind == Authored_Document_Scene
+                ? "nveditor.scene/v1"
+                : "nveditor.post_process/v1"))
+    {
+        return authored_fail(
+            Game_Result_Invalid_Document,
+            "snapshot schema_id does not match JSON $schema",
+            "$.$schema",
+            out_error);
+    }
+    if (document->object_count != 1)
+    {
+        return authored_fail(
+            Game_Result_Invalid_Document,
+            "Revision 1 documents contain only the root authored object",
+            "$",
+            out_error);
+    }
+
+    out_document->primary_object_id = out_document->root_object_id;
+    return Game_Result_Ok;
+}
+
+Game_Result
 authored_state_apply_document(
     Authored_State* state,
     const Author_Document_State* document,
@@ -1292,18 +1346,42 @@ authored_state_read_field(
             out_error);
     }
 
-    memset(out_value, 0, sizeof(*out_value));
     document = authored_find_document_const(state, document_id);
     if (document == 0 ||
         (document->root_object_id != object_id &&
          document->primary_object_id != object_id))
     {
+        memset(out_value, 0, sizeof(*out_value));
         return authored_fail(
             Game_Result_Invalid_Document,
             "authored document or object was not found",
             "$",
             out_error);
     }
+    return authored_document_read_field(
+        document,
+        field_id,
+        out_value,
+        out_error);
+}
+
+Game_Result
+authored_document_read_field(
+    const Authored_Document* document,
+    Author_Field_Id field_id,
+    Author_Value* out_value,
+    Game_Error* out_error)
+{
+    authored_clear_error(out_error);
+    if (document == 0 || field_id == 0 || out_value == 0)
+    {
+        return authored_fail(
+            Game_Result_Invalid_Argument,
+            "invalid authored field read",
+            "",
+            out_error);
+    }
+    memset(out_value, 0, sizeof(*out_value));
 
     if (document->kind == Authored_Document_Scene)
     {
@@ -1438,6 +1516,29 @@ authored_state_preview_field(
             Game_Result_Invalid_Document,
             "authored document or object was not found",
             "$",
+            out_error);
+    }
+    return authored_document_preview_field(
+        document,
+        field_id,
+        value,
+        out_error);
+}
+
+Game_Result
+authored_document_preview_field(
+    Authored_Document* document,
+    Author_Field_Id field_id,
+    const Author_Value* value,
+    Game_Error* out_error)
+{
+    authored_clear_error(out_error);
+    if (document == 0 || value == 0)
+    {
+        return authored_fail(
+            Game_Result_Invalid_Argument,
+            "invalid authored field preview",
+            "",
             out_error);
     }
 

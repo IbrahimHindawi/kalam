@@ -95,6 +95,15 @@ struct Msgpack_Decode_Result
 
 const char* msgpack_status_string(Msgpack_Status status);
 
+/*
+ * Decodes the integer payload Neovim documents for its Buffer, Window, and
+ * Tabpage ext types. The only sanctioned interpretation of ext payloads
+ * (docs/buffer_hosted_viewport.md section 2); everything else treats them
+ * as opaque. Returns -1 and sets ok to false when the payload is not one
+ * complete msgpack integer.
+ */
+qint64 msgpack_ext_handle_value(const Msgpack_Ext& ext, bool* ok = nullptr);
+
 } // namespace Kalam::Editor
 
 Q_DECLARE_METATYPE(Kalam::Editor::Msgpack_Bin)

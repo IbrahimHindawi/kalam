@@ -16,7 +16,6 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QLabel>
-#include <QSplitter>
 #include <QtMath>
 
 #include "neovim_rpc_client.h"
@@ -52,17 +51,18 @@ Editor_Main_Window::Editor_Main_Window(
         neovim_,
         this);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->setObjectName(QStringLiteral("editorSplitter"));
+    /*
+     * The buffer-hosted viewport layout (docs/buffer_hosted_viewport.md
+     * section 4): the Neovim grid surface fills the central widget, and
+     * the engine viewport is a native-window child overlaid on whichever
+     * Neovim window shows kalam://viewport. The viewport widget is never
+     * reparented; its HWND feeds the D3D11 swap chain.
+     */
     shell_->setObjectName(QStringLiteral("neovimEditorRegion"));
-    viewport_ = new Engine_Viewport_Widget(runtime_host_, splitter);
+    setCentralWidget(shell_);
+    viewport_ = new Engine_Viewport_Widget(runtime_host_, shell_);
     viewport_->setObjectName(QStringLiteral("engineViewport"));
-    splitter->addWidget(shell_);
-    splitter->addWidget(viewport_);
-    splitter->setStretchFactor(0, 3);
-    splitter->setStretchFactor(1, 2);
-    splitter->setSizes(QList<int>{850, 590});
-    setCentralWidget(splitter);
+    viewport_->hide();
 
     wire_editor();
     QTimer::singleShot(
@@ -122,6 +122,21 @@ void Editor_Main_Window::wire_editor()
         {
             cursor_geometry_ = geometry;
             project_context_popup();
+        });
+    connect(
+        shell_,
+        &Neovim_Grid_Widget::gridLayoutChanged,
+        this,
+        &Editor_Main_Window::update_viewport_overlay);
+    connect(
+        neovim_,
+        &Editor_Neovim_Adapter::viewportWindowsChanged,
+        this,
+        [this](const QVector<qlonglong>& windows, qlonglong active_window)
+        {
+            viewport_windows_ = windows;
+            active_viewport_window_ = active_window;
+            update_viewport_overlay();
         });
     connect(
         neovim_,
@@ -1027,24 +1042,46 @@ QVector<Author_Value_Owned> Editor_Main_Window::read_form_values(
     return values;
 }
 
+void Editor_Main_Window::update_viewport_overlay()
+{
+    const QRect cells =
+        shell_->model().window_screen_rect(active_viewport_window_);
+    const bool floating =
+        shell_->model().window_is_floating(active_viewport_window_);
+    if (!cells.isValid() || floating ||
+        cells.width() < 8 || cells.height() < 3)
+    {
+        viewport_->hide();
+        return;
+    }
+    const QSize cell = shell_->cell_size();
+    viewport_->setGeometry(
+        cells.left() * cell.width(),
+        cells.top() * cell.height(),
+        cells.width() * cell.width(),
+        cells.height() * cell.height());
+    viewport_->show();
+    viewport_->raise();
+}
+
 void Editor_Main_Window::focus_viewport()
 {
-    if (!viewport_->isVisible())
+    update_viewport_overlay();
+    if (viewport_->isVisible())
     {
-        viewport_->show();
+        viewport_->setFocus(Qt::OtherFocusReason);
     }
-    viewport_->setFocus(Qt::OtherFocusReason);
 }
 
 void Editor_Main_Window::toggle_viewport()
 {
-    const bool show_viewport = !viewport_->isVisible();
-    viewport_->setVisible(show_viewport);
-    if (show_viewport)
-    {
-        focus_viewport();
-    }
-    else
+    /*
+     * Layout is Neovim's: :kalam toggle viewport opens or closes the
+     * kalam://viewport window in Lua and the overlay follows win_pos.
+     * This slot only re-syncs the overlay.
+     */
+    update_viewport_overlay();
+    if (!viewport_->isVisible())
     {
         neovim_->focus_editor();
     }
@@ -1187,7 +1224,9 @@ void Editor_Main_Window::run_smoke_step()
             false,
             QStringLiteral(
                 "timed out waiting for the integrated editor "
-                "(context phase %1, mode %2, field %3, dirty %4, validation %5)")
+                "(context phase %1, mode %2, field %3, dirty %4, "
+                "validation %5, viewport windows %6 active %7 rect %8 "
+                "visible %9 initialized %10 grids %11)")
                 .arg(smoke_context_phase_)
                 .arg(context_popup_ != nullptr
                     ? QString::fromUtf8(context_popup_->mode())
@@ -1198,19 +1237,56 @@ void Editor_Main_Window::run_smoke_step()
                 .arg(context_popup_ != nullptr &&
                     context_popup_->is_dirty() ? 1 : 0)
                 .arg(context_popup_ != nullptr &&
-                    context_popup_->has_validation_error() ? 1 : 0));
+                    context_popup_->has_validation_error() ? 1 : 0)
+                .arg(viewport_windows_.size())
+                .arg(active_viewport_window_)
+                .arg(QStringLiteral("%1,%2 %3x%4")
+                    .arg(shell_->model()
+                        .window_screen_rect(active_viewport_window_).left())
+                    .arg(shell_->model()
+                        .window_screen_rect(active_viewport_window_).top())
+                    .arg(shell_->model()
+                        .window_screen_rect(active_viewport_window_).width())
+                    .arg(shell_->model()
+                        .window_screen_rect(active_viewport_window_).height()))
+                .arg(viewport_->isVisible() ? 1 : 0)
+                .arg(runtime_host_->viewport_initialized() ? 1 : 0)
+                .arg(shell_->model().rows() > 0 ? 1 : 0));
         return;
     }
 
-    QSplitter* splitter = qobject_cast<QSplitter*>(centralWidget());
-    if (splitter == nullptr || splitter->count() != 2 ||
-        splitter->widget(0) != shell_ ||
-        splitter->widget(1) != viewport_)
+    if (centralWidget() != shell_ || viewport_->parentWidget() != shell_)
     {
         finish_smoke(
             false,
-            QStringLiteral("editor layout is not the required two-region splitter"));
+            QStringLiteral(
+                "editor layout is not the buffer-hosted viewport overlay"));
         return;
+    }
+    if (viewport_->isVisible())
+    {
+        const QRect window_cells =
+            shell_->model().window_screen_rect(active_viewport_window_);
+        const QSize cell = shell_->cell_size();
+        const QRect expected(
+            window_cells.left() * cell.width(),
+            window_cells.top() * cell.height(),
+            window_cells.width() * cell.width(),
+            window_cells.height() * cell.height());
+        if (!window_cells.isValid() ||
+            (viewport_->geometry().topLeft() - expected.topLeft())
+                    .manhattanLength() > cell.width() + cell.height() ||
+            qAbs(viewport_->geometry().width() - expected.width()) >
+                cell.width() ||
+            qAbs(viewport_->geometry().height() - expected.height()) >
+                cell.height())
+        {
+            finish_smoke(
+                false,
+                QStringLiteral("the viewport overlay does not track its "
+                               "Neovim window"));
+            return;
+        }
     }
 
     if (!neovim_->is_ready() ||

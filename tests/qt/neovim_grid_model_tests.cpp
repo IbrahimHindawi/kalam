@@ -1,4 +1,5 @@
 #include "neovim_grid_model.h"
+#include "neovim_msgpack.h"
 #include "neovim_rpc_client.h"
 
 #include <QCoreApplication>
@@ -385,6 +386,199 @@ void test_unknown_events_and_other_grids()
         QStringLiteral("the grid survives unknown traffic"));
 }
 
+/* ------------------------------------------------- multigrid tests */
+
+QVariant window_handle_ext(qint64 handle)
+{
+    QByteArray payload;
+    const Kalam::Editor::Msgpack_Status status =
+        Kalam::Editor::msgpack_encode(QVariant(qlonglong(handle)), payload);
+    check(
+        status == Kalam::Editor::Msgpack_Status::Ok,
+        QStringLiteral("the test encodes a window handle payload"));
+    Kalam::Editor::Msgpack_Ext ext;
+    ext.type = 1;
+    ext.payload = payload;
+    return QVariant::fromValue(ext);
+}
+
+void test_multigrid_placement_and_composition()
+{
+    Neovim_Grid_Model model;
+    model.apply_redraw(resize_events(20, 10));
+
+    QVariantList fill;
+    fill << event(
+        QByteArrayLiteral("grid_line"),
+        QVariantList()
+            << 1 << 0 << 0
+            << QVariant(QVariantList() << cell(QByteArrayLiteral("g"), 1)));
+    model.apply_redraw(fill);
+
+    QVariantList placement_events;
+    placement_events << event(
+        QByteArrayLiteral("grid_resize"),
+        QVariantList() << 2 << 10 << 3);
+    placement_events << event(
+        QByteArrayLiteral("win_pos"),
+        QVariantList()
+            << 2 << window_handle_ext(1000) << 2 << 5 << 10 << 3);
+    placement_events << event(
+        QByteArrayLiteral("grid_line"),
+        QVariantList()
+            << 2 << 0 << 0
+            << QVariant(QVariantList() << cell(QByteArrayLiteral("w"), 1)));
+    const Grid_Update_Summary summary =
+        model.apply_redraw(placement_events);
+
+    check(
+        summary.window_layout_changed,
+        QStringLiteral("win_pos reports a layout change"));
+    check(
+        model.cell_at(2, 5).text == QStringLiteral("w"),
+        QStringLiteral("a placed grid's cell composes at its offset"));
+    check(
+        model.cell_at(0, 0).text == QStringLiteral("g"),
+        QStringLiteral("grid 1 shows through outside the window"));
+    check(
+        model.window_screen_rect(1000) == QRect(5, 2, 10, 3),
+        QStringLiteral("the window handle maps to its screen rectangle"));
+
+    int local_row = -1;
+    int local_column = -1;
+    check(
+        model.grid_at(2, 5, &local_row, &local_column) == 2 &&
+            local_row == 0 && local_column == 0,
+        QStringLiteral("hit-testing returns the window grid and local cell"));
+    check(
+        model.grid_at(0, 0) == 1,
+        QStringLiteral("hit-testing falls back to grid 1"));
+
+    QVariantList cursor_events;
+    cursor_events << event(
+        QByteArrayLiteral("grid_cursor_goto"),
+        QVariantList() << 2 << 1 << 1);
+    cursor_events << event(QByteArrayLiteral("flush"), QVariantList());
+    model.apply_redraw(cursor_events);
+    check(
+        model.cursor_grid() == 2 &&
+            model.cursor_row() == 3 &&
+            model.cursor_column() == 6,
+        QStringLiteral("the cursor publishes grid-offset global cells"));
+
+    bool covers_window_cell = false;
+    for (const QRect& damage : model.take_published_damage())
+    {
+        if (damage.contains(5, 2))
+        {
+            covers_window_cell = true;
+        }
+    }
+    check(
+        covers_window_cell,
+        QStringLiteral("flush translates window damage to global cells"));
+}
+
+void test_float_anchoring_and_message_grid()
+{
+    Neovim_Grid_Model model;
+    model.apply_redraw(resize_events(20, 10));
+
+    QVariantList events;
+    events << event(
+        QByteArrayLiteral("grid_resize"),
+        QVariantList() << 3 << 4 << 2);
+    events << event(
+        QByteArrayLiteral("win_float_pos"),
+        QVariantList()
+            << 3 << window_handle_ext(1001) << QByteArrayLiteral("NW")
+            << 1 << 1.0 << 2.0 << true << 60);
+    model.apply_redraw(events);
+
+    check(
+        model.window_screen_rect(1001) == QRect(2, 1, 4, 2),
+        QStringLiteral("a NW float anchors at its offset"));
+    check(
+        model.window_is_floating(1001),
+        QStringLiteral("the float is reported floating"));
+    check(
+        model.grid_at(1, 2) == 3,
+        QStringLiteral("the float sits above grid 1"));
+
+    QVariantList southeast;
+    southeast << event(
+        QByteArrayLiteral("win_float_pos"),
+        QVariantList()
+            << 3 << window_handle_ext(1001) << QByteArrayLiteral("SE")
+            << 1 << 6.0 << 6.0 << true << 60);
+    model.apply_redraw(southeast);
+    check(
+        model.window_screen_rect(1001) == QRect(2, 4, 4, 2),
+        QStringLiteral("a SE float subtracts its own size"));
+
+    /* The message grid outranks everything at its rows. */
+    QVariantList message;
+    message << event(
+        QByteArrayLiteral("grid_resize"),
+        QVariantList() << 4 << 20 << 2);
+    message << event(
+        QByteArrayLiteral("msg_set_pos"),
+        QVariantList() << 4 << 8 << false << QByteArrayLiteral("-"));
+    model.apply_redraw(message);
+    check(
+        model.grid_at(8, 0) == 4 && model.grid_at(9, 19) == 4,
+        QStringLiteral("the message grid composes on top"));
+    check(
+        model.grid_at(0, 0) == 1,
+        QStringLiteral("rows above the message grid are untouched"));
+}
+
+void test_hide_close_and_destroy()
+{
+    Neovim_Grid_Model model;
+    model.apply_redraw(resize_events(20, 10));
+
+    QVariantList events;
+    events << event(
+        QByteArrayLiteral("grid_resize"),
+        QVariantList() << 2 << 10 << 3);
+    events << event(
+        QByteArrayLiteral("win_pos"),
+        QVariantList()
+            << 2 << window_handle_ext(1000) << 0 << 0 << 10 << 3);
+    model.apply_redraw(events);
+    check(
+        model.grid_at(0, 0) == 2,
+        QStringLiteral("the window grid composes before hiding"));
+
+    QVariantList hide;
+    hide << event(QByteArrayLiteral("win_hide"), QVariantList() << 2);
+    const Grid_Update_Summary hide_summary = model.apply_redraw(hide);
+    check(
+        hide_summary.window_layout_changed &&
+            model.grid_at(0, 0) == 1 &&
+            !model.window_screen_rect(1000).isValid(),
+        QStringLiteral("win_hide removes the grid from composition"));
+
+    QVariantList replace;
+    replace << event(
+        QByteArrayLiteral("win_pos"),
+        QVariantList()
+            << 2 << window_handle_ext(1000) << 4 << 4 << 10 << 3);
+    model.apply_redraw(replace);
+    check(
+        model.window_screen_rect(1000) == QRect(4, 4, 10, 3),
+        QStringLiteral("a hidden grid re-places"));
+
+    QVariantList destroy;
+    destroy << event(QByteArrayLiteral("grid_destroy"), QVariantList() << 2);
+    model.apply_redraw(destroy);
+    check(
+        model.grid_at(4, 4) == 1 &&
+            !model.window_screen_rect(1000).isValid(),
+        QStringLiteral("grid_destroy removes grid and placement"));
+}
+
 /* --------------------------------------------- live Neovim golden run */
 
 void run_real_neovim_golden(const QString& neovim_program)
@@ -438,6 +632,7 @@ void run_real_neovim_golden(const QString& neovim_program)
     QVariantMap ui_options;
     ui_options.insert(QStringLiteral("rgb"), true);
     ui_options.insert(QStringLiteral("ext_linegrid"), true);
+    ui_options.insert(QStringLiteral("ext_multigrid"), true);
     client->call(
         QByteArrayLiteral("nvim_ui_attach"),
         QVariantList() << 60 << 12 << ui_options);
@@ -495,6 +690,56 @@ void run_real_neovim_golden(const QString& neovim_program)
         }),
         QStringLiteral("jumping to the end scrolls 200 into view"));
 
+    /* A vertical split yields two placed windows tiling the screen. */
+    client->call(
+        QByteArrayLiteral("nvim_command"),
+        QVariantList() << QByteArrayLiteral("vsplit"));
+
+    QVariantList window_handles;
+    Neovim_Rpc_Request* list_request = client->call(
+        QByteArrayLiteral("nvim_list_wins"),
+        QVariantList());
+    QObject::connect(
+        list_request,
+        &Neovim_Rpc_Request::finished,
+        &arena,
+        [&](quint32, const QVariant& result)
+        {
+            window_handles = result.toList();
+        });
+    check(
+        spin_until([&]() { return window_handles.size() == 2; }),
+        QStringLiteral("the split yields two windows"));
+
+    QVector<qint64> handles;
+    for (const QVariant& entry : window_handles)
+    {
+        bool ok = false;
+        const qint64 handle = Kalam::Editor::msgpack_ext_handle_value(
+            entry.value<Kalam::Editor::Msgpack_Ext>(),
+            &ok);
+        check(
+            ok,
+            QStringLiteral("real Window ext payloads decode to handles"));
+        handles.append(handle);
+    }
+
+    check(
+        spin_until([&]()
+        {
+            if (handles.size() != 2)
+            {
+                return false;
+            }
+            const QRect first = model.window_screen_rect(handles.at(0));
+            const QRect second = model.window_screen_rect(handles.at(1));
+            return first.isValid() && second.isValid() &&
+                !first.intersects(second) &&
+                first.height() == second.height() &&
+                first.width() > 10 && second.width() > 10;
+        }),
+        QStringLiteral("win_pos places both split windows disjointly"));
+
     client->call(
         QByteArrayLiteral("nvim_command"),
         QVariantList() << QByteArrayLiteral("qall!"));
@@ -530,6 +775,9 @@ int main(int argument_count, char** arguments)
         test_highlights_and_default_colors();
         test_modes_cursor_and_busy();
         test_unknown_events_and_other_grids();
+        test_multigrid_placement_and_composition();
+        test_float_anchoring_and_message_grid();
+        test_hide_close_and_destroy();
     }
     else
     {

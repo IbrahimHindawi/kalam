@@ -67,10 +67,57 @@ target_link_libraries(
         engine_core
 )
 
+# Pinned flecs v4.1.6, vendored amalgamated (docs/entity_documents.md
+# section 7). It lives entirely inside the game module: engine/, bridge/,
+# and editor/ never see a flecs type. Only the addons the authored world
+# needs are compiled in.
+add_library(
+    flecs_vendored
+    STATIC
+        extern/flecs/flecs.c
+)
+target_include_directories(
+    flecs_vendored
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/extern/flecs"
+)
+target_compile_definitions(
+    flecs_vendored
+    PUBLIC
+        # flecs.h defines flecs_STATIC itself; defining it here too
+        # is a redefinition under -Wmacro-redefined.
+        FLECS_CUSTOM_BUILD
+        FLECS_META
+        FLECS_QUERY_DSL
+)
+target_link_libraries(
+    flecs_vendored
+    PUBLIC
+        # flecs_dump_backtrace uses the symbol helpers.
+        dbghelp
+)
+set_target_properties(
+    flecs_vendored
+    PROPERTIES
+        C_STANDARD 11
+        FOLDER "extern"
+)
+if(MSVC)
+    # Third-party amalgamated source: keep first-party warning policy off it.
+    target_compile_options(flecs_vendored PRIVATE /W0 /wd4996)
+    set_property(
+        TARGET flecs_vendored
+        PROPERTY
+            MSVC_RUNTIME_LIBRARY
+            "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+    )
+endif()
+
 add_library(
     game_logic
     STATIC
         game/authored_state.cpp
+        game/authored_world.cpp
 )
 target_include_directories(
     game_logic
@@ -83,6 +130,8 @@ target_link_libraries(
         engine_runtime
         engine_core
         module_bridge
+    PRIVATE
+        flecs_vendored
 )
 kalam_apply_engine_policy(game_logic)
 
@@ -105,6 +154,34 @@ add_executable(
 )
 target_link_libraries(reflection_tool PRIVATE reflection_core)
 kalam_apply_engine_policy(reflection_tool)
+
+add_executable(
+    res_manifest_tool
+    reflection/res_manifest_tool.cpp
+)
+kalam_apply_engine_policy(res_manifest_tool)
+
+add_executable(
+    res_stage_tool
+    reflection/res_stage_tool.cpp
+)
+kalam_apply_engine_policy(res_stage_tool)
+
+# Stages res/ beside a target executable (docs/resource_manifest.md
+# section 5). The staged tree is the module's project root at run time.
+function(kalam_stage_resources target)
+    add_custom_command(
+        TARGET "${target}"
+        POST_BUILD
+        COMMAND
+            "$<TARGET_FILE:res_stage_tool>"
+            --res "${CMAKE_SOURCE_DIR}/res"
+            --stage "$<TARGET_FILE_DIR:${target}>"
+        COMMENT "Staging manifest resources beside ${target}"
+        VERBATIM
+    )
+    add_dependencies("${target}" res_stage_tool)
+endfunction()
 
 set(KALAM_GENERATED_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(
@@ -132,6 +209,34 @@ add_custom_target(
     author_schema_generation
     DEPENDS
         "${KALAM_GENERATED_AUTHOR_SCHEMAS}"
+)
+
+set(
+    KALAM_GENERATED_RES_MANIFEST
+    "${KALAM_GENERATED_DIRECTORY}/res_manifest.generated.h"
+)
+add_custom_command(
+    OUTPUT
+        "${KALAM_GENERATED_RES_MANIFEST}"
+    COMMAND
+        "$<TARGET_FILE:res_manifest_tool>"
+        --manifest
+        "${CMAKE_CURRENT_SOURCE_DIR}/res/res.manifest.json"
+        --output
+        "${KALAM_GENERATED_RES_MANIFEST}"
+    DEPENDS
+        res_manifest_tool
+        res/res.manifest.json
+        res/shaders/module_basic.hlsl
+        res/textures/checker.dds
+    COMMENT
+        "Generating deterministic resource-manifest tables"
+    VERBATIM
+)
+add_custom_target(
+    res_manifest_generation
+    DEPENDS
+        "${KALAM_GENERATED_RES_MANIFEST}"
 )
 add_dependencies(game_logic author_schema_generation)
 target_include_directories(
@@ -186,11 +291,15 @@ add_library(
     render_d3d11
     STATIC
         engine/render/d3d11/module_renderer.cpp
+        engine/render/d3d11/dds_parse.cpp
 )
+add_dependencies(render_d3d11 res_manifest_generation)
 target_include_directories(
     render_d3d11
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/engine/render/d3d11
+    PRIVATE
+        "${KALAM_GENERATED_DIRECTORY}"
 )
 target_link_libraries(
     render_d3d11
@@ -450,6 +559,14 @@ if(KALAM_BUILD_TESTS)
     add_test(NAME game.authored_state COMMAND authored_state_tests)
 
     add_executable(
+        authored_world_tests
+        tests/game/authored_world_tests.cpp
+    )
+    target_link_libraries(authored_world_tests PRIVATE game_logic)
+    kalam_apply_engine_policy(authored_world_tests)
+    add_test(NAME game.authored_world COMMAND authored_world_tests)
+
+    add_executable(
         d3d11_viewport_host_smoke
         tests/render/d3d11_viewport_host_smoke.cpp
     )
@@ -472,6 +589,11 @@ if(KALAM_BUILD_TESTS)
         tests/render/game_module_warp_smoke.cpp
     )
     add_dependencies(game_module_warp_smoke game_module)
+target_compile_definitions(
+    game_module_warp_smoke
+    PRIVATE
+        KALAM_TEST_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+)
     target_link_libraries(
         game_module_warp_smoke
         PRIVATE
@@ -498,6 +620,23 @@ if(KALAM_BUILD_TESTS)
     target_link_libraries(reflection_tool_tests PRIVATE reflection_core)
     kalam_apply_engine_policy(reflection_tool_tests)
     add_test(NAME reflection.generator_unit COMMAND reflection_tool_tests)
+
+    add_test(
+        NAME reflection.res_manifest_tool
+        COMMAND
+            "${CMAKE_COMMAND}"
+            -DKALAM_RES_MANIFEST_TOOL=$<TARGET_FILE:res_manifest_tool>
+            -DKALAM_FIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection/res_manifest_fixtures
+            -DKALAM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tests/res_manifest
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/reflection/res_manifest_tool_tests.cmake"
+    )
+    set_tests_properties(
+        reflection.res_manifest_tool
+        PROPERTIES
+            LABELS "reflection"
+            TIMEOUT 30
+    )
 
     set(
         KALAM_REFLECTION_FIXTURE_OUTPUT

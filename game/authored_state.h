@@ -72,6 +72,28 @@ Game_Result authored_state_preview_field(
     const Author_Value* value,
     Game_Error* out_error);
 
+/*
+ * Document-level operations. The array store above and the ECS store in
+ * authored_world.h share these, so parsing, validation, range checks, and
+ * field mapping exist exactly once.
+ */
+Game_Result authored_document_parse(
+    const Author_Document_State* document,
+    Authored_Document* out_document,
+    Game_Error* out_error);
+
+Game_Result authored_document_read_field(
+    const Authored_Document* document,
+    Author_Field_Id field_id,
+    Author_Value* out_value,
+    Game_Error* out_error);
+
+Game_Result authored_document_preview_field(
+    Authored_Document* document,
+    Author_Field_Id field_id,
+    const Author_Value* value,
+    Game_Error* out_error);
+
 const Authored_Scene* authored_state_latest_scene(const Authored_State* state);
 const Authored_Post_Process* authored_state_latest_post_process(
     const Authored_State* state);

@@ -1,0 +1,9 @@
+{
+  "$schema": "nveditor.res_manifest/v1",
+  "shaders": [
+    { "program": "module_basic", "source": "shaders/module_basic.hlsl" }
+  ],
+  "textures": [
+    { "path": "textures/checker.dds", "srgb": false }
+  ]
+}

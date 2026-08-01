@@ -1,0 +1,6 @@
+{
+  "$schema": "nveditor.res_manifest/v1",
+  "shaders": [
+    { "id": "hand_written", "program": "x", "source": "missing.hlsl" }
+  ]
+}

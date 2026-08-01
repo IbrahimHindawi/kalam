@@ -1,5 +1,8 @@
 #include "module_renderer.h"
 
+#include "dds_parse.h"
+#include "res_manifest.generated.h"
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -29,59 +32,6 @@ typedef struct Module_Render_Matrix
 {
     float value[16];
 } Module_Render_Matrix;
-
-static const char module_renderer_shader_source[] =
-    "cbuffer Cube_Constants : register(b0)\n"
-    "{\n"
-    "    row_major float4x4 model_view_projection;\n"
-    "    row_major float4x4 model;\n"
-    "    float4 cube_color;\n"
-    "    float4 post_tint;\n"
-    "    float4 post_parameters;\n"
-    "};\n"
-    "\n"
-    "struct Vertex_Input\n"
-    "{\n"
-    "    float3 position : POSITION;\n"
-    "    float3 normal : NORMAL;\n"
-    "};\n"
-    "\n"
-    "struct Vertex_Output\n"
-    "{\n"
-    "    float4 position : SV_POSITION;\n"
-    "    float3 normal : NORMAL;\n"
-    "    float2 screen_uv : TEXCOORD0;\n"
-    "};\n"
-    "\n"
-    "Vertex_Output vs_main(Vertex_Input input)\n"
-    "{\n"
-    "    Vertex_Output output;\n"
-    "    output.position = mul(float4(input.position, 1.0f), "
-        "model_view_projection);\n"
-    "    output.normal = mul(float4(input.normal, 0.0f), model).xyz;\n"
-    "    float2 ndc = output.position.xy / max(output.position.w, 0.0001f);\n"
-    "    output.screen_uv = float2(ndc.x * 0.5f + 0.5f, "
-        "-ndc.y * 0.5f + 0.5f);\n"
-    "    return output;\n"
-    "}\n"
-    "\n"
-    "float4 ps_main(Vertex_Output input) : SV_TARGET\n"
-    "{\n"
-    "    const float3 light_direction = "
-        "normalize(float3(-0.35f, 0.65f, -0.68f));\n"
-    "    float diffuse = saturate(dot(normalize(input.normal), "
-        "light_direction));\n"
-    "    float lighting = 0.30f + 0.70f * diffuse;\n"
-    "    float3 color = cube_color.rgb * lighting;\n"
-    "    float brightest = max(color.r, max(color.g, color.b));\n"
-    "    float bloom = max(brightest - post_parameters.y, 0.0f);\n"
-    "    color += bloom * 0.20f;\n"
-    "    float2 centered = input.screen_uv * 2.0f - 1.0f;\n"
-    "    float edge = saturate(dot(centered, centered));\n"
-    "    color *= 1.0f - edge * post_parameters.z;\n"
-    "    color *= post_tint.rgb * post_parameters.x;\n"
-    "    return float4(color, cube_color.a * post_tint.a);\n"
-    "}\n";
 
 static const Module_Render_Vertex module_renderer_cube_vertices[] =
 {
@@ -437,11 +387,113 @@ module_renderer_build_constants(
     out_constants->post_parameters[3] = 0.0f;
 }
 
+/*
+ * Manifest resource loading (docs/resource_manifest.md section 6). Files
+ * are read whole into a caller-owned buffer; the module owns every byte
+ * it allocates and frees it before returning.
+ */
+typedef struct Module_Resource_File
+{
+    uint8_t* bytes;
+    uint64_t size;
+} Module_Resource_File;
+
+static void
+module_resource_file_free(Module_Resource_File* file)
+{
+    if (file->bytes != 0)
+    {
+        HeapFree(GetProcessHeap(), 0, file->bytes);
+        file->bytes = 0;
+    }
+    file->size = 0;
+}
+
+static uint32_t
+module_resource_file_read(
+    const char* project_root,
+    uint64_t project_root_size,
+    const char* relative_path,
+    Module_Resource_File* out_file)
+{
+    char full_path[1024];
+    uint64_t root_length = project_root_size;
+    size_t relative_length = strlen(relative_path);
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    LARGE_INTEGER file_size;
+    DWORD read_bytes = 0;
+
+    out_file->bytes = 0;
+    out_file->size = 0;
+
+    while (root_length > 0 &&
+           (project_root[root_length - 1] == '/' ||
+            project_root[root_length - 1] == '\\'))
+    {
+        --root_length;
+    }
+    if (root_length == 0 ||
+        root_length + 1 + relative_length + 1 > sizeof(full_path))
+    {
+        return 0;
+    }
+    memcpy(full_path, project_root, (size_t)root_length);
+    full_path[root_length] = '/';
+    memcpy(full_path + root_length + 1, relative_path, relative_length);
+    full_path[root_length + 1 + relative_length] = 0;
+
+    handle = CreateFileA(
+        full_path,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        0,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        0);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        return 0;
+    }
+    if (!GetFileSizeEx(handle, &file_size) ||
+        file_size.QuadPart <= 0 ||
+        file_size.QuadPart > (LONGLONG)(64 * 1024 * 1024))
+    {
+        CloseHandle(handle);
+        return 0;
+    }
+    out_file->bytes = (uint8_t*)HeapAlloc(
+        GetProcessHeap(),
+        0,
+        (SIZE_T)file_size.QuadPart);
+    if (out_file->bytes == 0)
+    {
+        CloseHandle(handle);
+        return 0;
+    }
+    if (!ReadFile(
+            handle,
+            out_file->bytes,
+            (DWORD)file_size.QuadPart,
+            &read_bytes,
+            0) ||
+        read_bytes != (DWORD)file_size.QuadPart)
+    {
+        CloseHandle(handle);
+        module_resource_file_free(out_file);
+        return 0;
+    }
+    CloseHandle(handle);
+    out_file->size = (uint64_t)file_size.QuadPart;
+    return 1;
+}
+
 Module_Renderer_Result
 module_renderer_create(
     Module_Renderer* out_renderer,
     void* borrowed_d3d11_device,
-    void* borrowed_d3d11_immediate_context)
+    void* borrowed_d3d11_immediate_context,
+    const char* project_root,
+    uint64_t project_root_size)
 {
     ID3D11Device* device = (ID3D11Device*)borrowed_d3d11_device;
     ID3DBlob* vertex_shader_bytecode = 0;
@@ -453,6 +505,17 @@ module_renderer_create(
     D3D11_RASTERIZER_DESC rasterizer_desc;
     D3D11_DEPTH_STENCIL_DESC depth_desc;
     D3D11_BLEND_DESC blend_desc;
+    D3D11_TEXTURE2D_DESC texture_desc;
+    D3D11_SUBRESOURCE_DATA texture_data;
+    D3D11_SHADER_RESOURCE_VIEW_DESC texture_view_desc;
+    D3D11_SAMPLER_DESC sampler_desc;
+    Module_Resource_File shader_file = {0, 0};
+    Module_Resource_File texture_file = {0, 0};
+    Dds_Image texture_image;
+    Dds_Parse_Result dds_result = Dds_Parse_Result_Ok;
+    const Res_Shader_Entry* shader_entry = &res_shader_table[
+        res_shader_module_basic];
+    const Res_Tex_Entry* texture_entry = &res_tex_table[res_tex_checker];
     Module_Renderer_Result failure_result =
         Module_Renderer_Result_Resource_Create_Failed;
     UINT compiler_flags = D3DCOMPILE_ENABLE_STRICTNESS;
@@ -460,12 +523,15 @@ module_renderer_create(
 
     if (out_renderer == 0 ||
         borrowed_d3d11_device == 0 ||
-        borrowed_d3d11_immediate_context == 0)
+        borrowed_d3d11_immediate_context == 0 ||
+        project_root == 0 ||
+        project_root_size == 0)
     {
         return Module_Renderer_Result_Invalid_Argument;
     }
 
     memset(out_renderer, 0, sizeof(*out_renderer));
+    memset(&texture_image, 0, sizeof(texture_image));
     out_renderer->device = borrowed_d3d11_device;
     out_renderer->immediate_context = borrowed_d3d11_immediate_context;
     out_renderer->last_hresult = (int32_t)S_OK;
@@ -476,10 +542,21 @@ module_renderer_create(
     compiler_flags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
 #endif
 
+    if (!module_resource_file_read(
+            project_root,
+            project_root_size,
+            shader_entry->path,
+            &shader_file))
+    {
+        out_renderer->failed_resource_path = shader_entry->path;
+        failure_result = Module_Renderer_Result_Resource_Missing;
+        goto fail;
+    }
+
     hresult = D3DCompile(
-        module_renderer_shader_source,
-        sizeof(module_renderer_shader_source) - 1,
-        "module_renderer_embedded.hlsl",
+        shader_file.bytes,
+        (SIZE_T)shader_file.size,
+        shader_entry->path,
         0,
         0,
         "vs_main",
@@ -491,6 +568,7 @@ module_renderer_create(
     module_renderer_release((void**)&compiler_messages);
     if (FAILED(hresult))
     {
+        out_renderer->failed_resource_path = shader_entry->path;
         failure_result = module_renderer_fail(
             out_renderer,
             Module_Renderer_Result_Shader_Compile_Failed,
@@ -499,9 +577,9 @@ module_renderer_create(
     }
 
     hresult = D3DCompile(
-        module_renderer_shader_source,
-        sizeof(module_renderer_shader_source) - 1,
-        "module_renderer_embedded.hlsl",
+        shader_file.bytes,
+        (SIZE_T)shader_file.size,
+        shader_entry->path,
         0,
         0,
         "ps_main",
@@ -513,12 +591,14 @@ module_renderer_create(
     module_renderer_release((void**)&compiler_messages);
     if (FAILED(hresult))
     {
+        out_renderer->failed_resource_path = shader_entry->path;
         failure_result = module_renderer_fail(
             out_renderer,
             Module_Renderer_Result_Shader_Compile_Failed,
             hresult);
         goto fail;
     }
+    module_resource_file_free(&shader_file);
 
     hresult = device->CreateVertexShader(
         vertex_shader_bytecode->GetBufferPointer(),
@@ -696,6 +776,115 @@ module_renderer_create(
         goto fail;
     }
 
+    /* The manifest surface texture. */
+    if (!module_resource_file_read(
+            project_root,
+            project_root_size,
+            texture_entry->path,
+            &texture_file))
+    {
+        out_renderer->failed_resource_path = texture_entry->path;
+        failure_result = Module_Renderer_Result_Resource_Missing;
+        goto fail;
+    }
+    dds_result = dds_parse(
+        texture_file.bytes,
+        texture_file.size,
+        &texture_image);
+    if (dds_result != Dds_Parse_Result_Ok)
+    {
+        out_renderer->failed_resource_path = texture_entry->path;
+        failure_result = Module_Renderer_Result_Resource_Invalid;
+        goto fail;
+    }
+
+    memset(&texture_desc, 0, sizeof(texture_desc));
+    texture_desc.Width = texture_image.width;
+    texture_desc.Height = texture_image.height;
+    texture_desc.MipLevels = 1;
+    texture_desc.ArraySize = 1;
+    switch (texture_image.format)
+    {
+    case Dds_Format_B8G8R8A8:
+        texture_desc.Format = texture_entry->srgb
+            ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+            : DXGI_FORMAT_B8G8R8A8_UNORM;
+        break;
+    case Dds_Format_R8G8B8A8:
+        texture_desc.Format = texture_entry->srgb
+            ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+            : DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+    case Dds_Format_BC1:
+        texture_desc.Format = texture_entry->srgb
+            ? DXGI_FORMAT_BC1_UNORM_SRGB
+            : DXGI_FORMAT_BC1_UNORM;
+        break;
+    default:
+        texture_desc.Format = texture_entry->srgb
+            ? DXGI_FORMAT_BC3_UNORM_SRGB
+            : DXGI_FORMAT_BC3_UNORM;
+        break;
+    }
+    texture_desc.SampleDesc.Count = 1;
+    texture_desc.Usage = D3D11_USAGE_IMMUTABLE;
+    texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    memset(&texture_data, 0, sizeof(texture_data));
+    texture_data.pSysMem = texture_image.data;
+    texture_data.SysMemPitch = texture_image.row_pitch;
+
+    hresult = device->CreateTexture2D(
+        &texture_desc,
+        &texture_data,
+        (ID3D11Texture2D**)&out_renderer->surface_texture);
+    if (FAILED(hresult))
+    {
+        out_renderer->failed_resource_path = texture_entry->path;
+        failure_result = module_renderer_fail(
+            out_renderer,
+            Module_Renderer_Result_Resource_Create_Failed,
+            hresult);
+        goto fail;
+    }
+    module_resource_file_free(&texture_file);
+
+    memset(&texture_view_desc, 0, sizeof(texture_view_desc));
+    texture_view_desc.Format = texture_desc.Format;
+    texture_view_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    texture_view_desc.Texture2D.MipLevels = 1;
+    hresult = device->CreateShaderResourceView(
+        (ID3D11Resource*)out_renderer->surface_texture,
+        &texture_view_desc,
+        (ID3D11ShaderResourceView**)&out_renderer->surface_texture_view);
+    if (FAILED(hresult))
+    {
+        failure_result = module_renderer_fail(
+            out_renderer,
+            Module_Renderer_Result_Resource_Create_Failed,
+            hresult);
+        goto fail;
+    }
+
+    memset(&sampler_desc, 0, sizeof(sampler_desc));
+    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler_desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampler_desc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
+    hresult = device->CreateSamplerState(
+        &sampler_desc,
+        (ID3D11SamplerState**)&out_renderer->surface_sampler);
+    if (FAILED(hresult))
+    {
+        failure_result = module_renderer_fail(
+            out_renderer,
+            Module_Renderer_Result_Resource_Create_Failed,
+            hresult);
+        goto fail;
+    }
+
     module_renderer_release((void**)&pixel_shader_bytecode);
     module_renderer_release((void**)&vertex_shader_bytecode);
     out_renderer->initialized = 1;
@@ -703,12 +892,18 @@ module_renderer_create(
     return Module_Renderer_Result_Ok;
 
 fail:
+    module_resource_file_free(&shader_file);
+    module_resource_file_free(&texture_file);
     module_renderer_release((void**)&compiler_messages);
     module_renderer_release((void**)&pixel_shader_bytecode);
     module_renderer_release((void**)&vertex_shader_bytecode);
     hresult = (HRESULT)out_renderer->last_hresult;
-    module_renderer_destroy(out_renderer);
-    out_renderer->last_hresult = (int32_t)hresult;
+    {
+        const char* failed_path = out_renderer->failed_resource_path;
+        module_renderer_destroy(out_renderer);
+        out_renderer->last_hresult = (int32_t)hresult;
+        out_renderer->failed_resource_path = failed_path;
+    }
     return failure_result;
 }
 
@@ -745,6 +940,9 @@ module_renderer_destroy(Module_Renderer* renderer)
         context->Flush();
     }
 
+    module_renderer_release(&renderer->surface_sampler);
+    module_renderer_release(&renderer->surface_texture_view);
+    module_renderer_release(&renderer->surface_texture);
     module_renderer_release(&renderer->blend_state);
     module_renderer_release(&renderer->depth_disabled_state);
     module_renderer_release(&renderer->depth_enabled_state);
@@ -772,8 +970,6 @@ module_renderer_render_cube(
     ID3D11DepthStencilView* depth_stencil_view = 0;
     ID3D11Buffer* vertex_buffer = 0;
     ID3D11Buffer* constant_buffer = 0;
-    ID3D11ShaderResourceView* null_shader_resource = 0;
-    ID3D11SamplerState* null_sampler = 0;
     D3D11_VIEWPORT viewport;
     Module_Render_Constants constants;
     UINT vertex_stride = (UINT)sizeof(Module_Render_Vertex);
@@ -904,8 +1100,14 @@ module_renderer_render_cube(
         0,
         0);
     context->PSSetConstantBuffers(0, 1, &constant_buffer);
-    context->PSSetShaderResources(0, 1, &null_shader_resource);
-    context->PSSetSamplers(0, 1, &null_sampler);
+    {
+        ID3D11ShaderResourceView* surface_view =
+            (ID3D11ShaderResourceView*)renderer->surface_texture_view;
+        ID3D11SamplerState* surface_sampler =
+            (ID3D11SamplerState*)renderer->surface_sampler;
+        context->PSSetShaderResources(0, 1, &surface_view);
+        context->PSSetSamplers(0, 1, &surface_sampler);
+    }
 
     context->DrawIndexed(
         (UINT)(sizeof(module_renderer_cube_indices) /

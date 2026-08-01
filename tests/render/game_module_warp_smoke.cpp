@@ -562,6 +562,9 @@ test_hidden_warp_game_module(const char* module_path)
         host.immediate_context;
     game_create_desc.host_user = &log_message_count;
     game_create_desc.host_log = test_log;
+    game_create_desc.project_root.data = KALAM_TEST_PROJECT_ROOT;
+    game_create_desc.project_root.size =
+        (uint64_t)(sizeof(KALAM_TEST_PROJECT_ROOT) - 1);
     game_result = api.create(&game_create_desc, &game, &error);
     if (game_result != Game_Result_Ok)
     {

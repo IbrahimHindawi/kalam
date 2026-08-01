@@ -218,15 +218,125 @@ end
 vim.cmd("Kalam")
 check(
   notifications[#notifications] ~= nil
-    and notifications[#notifications].message:match(":Kalam edit context") ~= nil
+    and notifications[#notifications].message:match(":kalam edit context") ~= nil
     and notifications[#notifications].message:match("<Plug>%(KalamEditContext%)") ~= nil,
-  "Kalam with no arguments lists actions and documented Plug mappings"
+  "kalam with no arguments lists actions and documented Plug mappings"
 )
 vim.cmd("Kalam does-not-exist")
 check(
   notifications[#notifications] ~= nil
-    and notifications[#notifications].message:match("unknown Kalam operation") ~= nil,
-  "Kalam invalid operation is concise"
+    and notifications[#notifications].message:match("unknown kalam operation") ~= nil,
+  "kalam invalid operation is concise"
+)
+
+check(
+  vim.fn.maparg("kalam", "c", true, true).lhs == "kalam",
+  "lowercase :kalam cmdline abbreviation is installed"
+)
+
+-- The kalam://viewport buffer contract
+-- (docs/buffer_hosted_viewport.md section 3).
+local viewport_events = {}
+local viewport_autocmd = vim.api.nvim_create_autocmd("User", {
+  pattern = "NvEditorEvent",
+  callback = function(args)
+    if args.data and args.data.method == "nveditor.viewport_windows" then
+      table.insert(viewport_events, args.data.payload)
+    end
+  end,
+})
+
+local viewport_bufnr = nveditor.viewport_bufnr()
+check(
+  vim.api.nvim_buf_is_valid(viewport_bufnr),
+  "the viewport buffer is created on demand"
+)
+check(
+  vim.bo[viewport_bufnr].buftype == "nofile"
+    and not vim.bo[viewport_bufnr].modifiable
+    and vim.bo[viewport_bufnr].filetype == "kalam.viewport",
+  "the viewport buffer is an unmodifiable kalam.viewport scratch buffer"
+)
+check(
+  vim.api.nvim_buf_get_name(viewport_bufnr):match("kalam://viewport") ~= nil,
+  "the viewport buffer is named kalam://viewport"
+)
+check(
+  nveditor.viewport_bufnr() == viewport_bufnr,
+  "viewport_bufnr is idempotent"
+)
+
+local viewport_mappings = { ["<CR>"] = false, ["i"] = false, ["q"] = false }
+for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(viewport_bufnr, "n")) do
+  for wanted in pairs(viewport_mappings) do
+    if mapping.lhs == wanted
+        or mapping.lhs == wanted:gsub("<CR>", "\r") then
+      viewport_mappings[wanted] = true
+    end
+  end
+end
+check(
+  viewport_mappings["<CR>"] and viewport_mappings["i"]
+    and viewport_mappings["q"],
+  "the viewport buffer claims only its buffer-local mappings"
+)
+
+local function viewport_window_count()
+  local count = 0
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == viewport_bufnr then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+nveditor.viewport_toggle()
+check(
+  viewport_window_count() == 1,
+  "toggling opens one viewport window"
+)
+nveditor.viewport_open()
+check(
+  viewport_window_count() == 1,
+  "opening again reuses the existing window"
+)
+vim.wait(200, function()
+  return #viewport_events > 0
+end)
+check(
+  #viewport_events > 0
+    and #viewport_events[#viewport_events].windows == 1
+    and viewport_events[#viewport_events].active ~= 0,
+  "opening the viewport reports its window set"
+)
+
+local before_close = #viewport_events
+nveditor.viewport_toggle()
+check(
+  viewport_window_count() == 0,
+  "toggling again closes the viewport window"
+)
+vim.wait(200, function()
+  return #viewport_events > before_close
+end)
+check(
+  #viewport_events > before_close
+    and #viewport_events[#viewport_events].windows == 0,
+  "closing the viewport reports an empty window set"
+)
+vim.api.nvim_del_autocmd(viewport_autocmd)
+local help_count_before = #notifications
+vim.fn.feedkeys(":kalam\r", "tx")
+check(
+  #notifications > help_count_before
+    and notifications[#notifications].message:match("kalam actions") ~= nil,
+  "typing :kalam reaches the dispatcher through the abbreviation"
+)
+vim.fn.feedkeys(":let g:kalam_abbrev_probe = 'kalam kept'\r", "tx")
+check(
+  vim.g.kalam_abbrev_probe == "kalam kept",
+  "the abbreviation leaves mid-line kalam text alone"
 )
 vim.notify = original_notify
 
@@ -269,20 +379,21 @@ for _, command in ipairs({
   "Kalam build reload",
   "Kalam focus editor",
   "Kalam focus viewport",
-  "Kalam toggle viewport",
   "Kalam play",
   "Kalam stop",
 }) do
   vim.cmd(command)
 end
 
+-- toggle.viewport is deliberately absent: it acts on the Neovim layout
+-- locally (docs/buffer_hosted_viewport.md) and sends no action
+-- notification; its behavior is covered by the viewport contract tests.
 local expected_actions = {
   { method = "nveditor.context_edit", action = "edit.context" },
   { method = "nveditor.form_edit", action = "edit.form" },
   { method = "nveditor.build_reload", action = "build.reload" },
   { method = "nveditor.focus_editor", action = "focus.editor" },
   { method = "nveditor.focus_viewport", action = "focus.viewport" },
-  { method = "nveditor.toggle_viewport", action = "toggle.viewport" },
   { method = "nveditor.play", action = "play" },
   { method = "nveditor.stop", action = "stop" },
 }

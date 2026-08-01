@@ -219,6 +219,9 @@ reload_render_request(
         context->viewport->immediate_context;
     request.create_desc.host_user = context;
     request.create_desc.host_log = reload_render_log;
+    request.create_desc.project_root.data = KALAM_TEST_PROJECT_ROOT;
+    request.create_desc.project_root.size =
+        (uint64_t)(sizeof(KALAM_TEST_PROJECT_ROOT) - 1);
     request.documents = context->document;
     request.document_count = 1;
     request.clear_context_bindings = reload_render_clear_context;

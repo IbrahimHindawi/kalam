@@ -1082,30 +1082,163 @@ local function dispatch_simple(action_id, action)
   return true
 end
 
+-- The buffer-hosted viewport (docs/buffer_hosted_viewport.md section 3).
+-- Neovim owns the layout; the Qt shell overlays the engine viewport on
+-- whichever window shows this buffer.
+
+local viewport_buffer_name = "kalam://viewport"
+local viewport_buffer = nil
+
+local function viewport_windows_in_tab()
+  local bufnr = viewport_buffer
+  local windows = {}
+  if bufnr == nil or not vim.api.nvim_buf_is_valid(bufnr) then
+    return windows
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == bufnr then
+      table.insert(windows, win)
+    end
+  end
+  return windows
+end
+
+local function notify_viewport_windows()
+  local windows = viewport_windows_in_tab()
+  local active = windows[1] or 0
+  local current = vim.api.nvim_get_current_win()
+  for _, win in ipairs(windows) do
+    if win == current then
+      active = win
+    end
+  end
+  rpc_notify("nveditor.viewport_windows", {
+    windows = windows,
+    active = active,
+  })
+end
+
+function M.viewport_bufnr()
+  if viewport_buffer ~= nil and vim.api.nvim_buf_is_valid(viewport_buffer) then
+    return viewport_buffer
+  end
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(bufnr, viewport_buffer_name)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+    "[ kalam viewport - <CR> to enter, q to close ]",
+  })
+  vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].filetype = "kalam.viewport"
+  for _, lhs in ipairs({ "<CR>", "i" }) do
+    vim.keymap.set("n", lhs, function()
+      return M.dispatch("focus.viewport")
+    end, { buffer = bufnr, silent = true, desc = "kalam: enter viewport" })
+  end
+  vim.keymap.set("n", "q", function()
+    local windows = viewport_windows_in_tab()
+    if #windows > 0 then
+      vim.api.nvim_win_close(windows[1], false)
+    end
+  end, { buffer = bufnr, silent = true, desc = "kalam: close viewport" })
+
+  local group = vim.api.nvim_create_augroup("KalamViewportBuffer", {
+    clear = true,
+  })
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufWinLeave" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      vim.schedule(notify_viewport_windows)
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function()
+      vim.schedule(notify_viewport_windows)
+    end,
+  })
+  viewport_buffer = bufnr
+  return bufnr
+end
+
+function M.viewport_open()
+  local bufnr = M.viewport_bufnr()
+  local existing = viewport_windows_in_tab()
+  if #existing > 0 then
+    return existing[1]
+  end
+  local previous = vim.api.nvim_get_current_win()
+  local width = math.max(20, math.floor(vim.o.columns * 2 / 5))
+  vim.cmd("botright " .. width .. "vsplit")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, bufnr)
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].winfixwidth = false
+  if vim.api.nvim_win_is_valid(previous) then
+    vim.api.nvim_set_current_win(previous)
+  end
+  vim.schedule(notify_viewport_windows)
+  return win
+end
+
+function M.viewport_close()
+  local windows = viewport_windows_in_tab()
+  for _, win in ipairs(windows) do
+    vim.api.nvim_win_close(win, false)
+  end
+  vim.schedule(notify_viewport_windows)
+  return #windows > 0
+end
+
+function M.viewport_toggle()
+  if #viewport_windows_in_tab() > 0 then
+    M.viewport_close()
+  else
+    M.viewport_open()
+  end
+  return true
+end
+
+local function dispatch_toggle_viewport()
+  return M.viewport_toggle()
+end
+
+local function dispatch_focus_viewport(action_id, action)
+  local windows = viewport_windows_in_tab()
+  local win = windows[1] or M.viewport_open()
+  if win ~= nil and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+  end
+  rpc_notify(action.notification, focus_payload(action_id))
+  return true
+end
+
 action_registry["edit.context"].run = dispatch_edit_context
 action_registry["edit.form"].run = dispatch_edit_form
 action_registry["build.reload"].run = dispatch_build_reload
 action_registry["focus.editor"].run = dispatch_focus
-action_registry["focus.viewport"].run = dispatch_focus
-action_registry["toggle.viewport"].run = dispatch_simple
+action_registry["focus.viewport"].run = dispatch_focus_viewport
+action_registry["toggle.viewport"].run = dispatch_toggle_viewport
 action_registry.play.run = dispatch_simple
 action_registry.stop.run = dispatch_simple
 
 local function notify_help(prefix)
-  local lines = { "Kalam actions:" }
+  local lines = { "kalam actions:" }
   local found = false
   for _, action_id in ipairs(action_order) do
     local action = action_registry[action_id]
     local syntax = action_syntax(action)
     if prefix == nil or syntax:sub(1, #prefix) == prefix then
-      table.insert(lines, string.format("  :Kalam %-16s %s", syntax, action.description))
+      table.insert(lines, string.format("  :kalam %-16s %s", syntax, action.description))
       found = true
     end
   end
 
   if not found then
     local message = string.format(
-      "unknown Kalam operation: %s (run :Kalam for help)",
+      "unknown kalam operation: %s (run :kalam for help)",
       prefix
     )
     vim.notify(message, vim.log.levels.WARN)
@@ -1120,7 +1253,7 @@ local function notify_help(prefix)
     if prefix == nil or syntax:sub(1, #prefix) == prefix then
       table.insert(
         lines,
-        string.format("  %s  -> :Kalam %s", plug_mappings[action_id], syntax)
+        string.format("  %s  -> :kalam %s", plug_mappings[action_id], syntax)
       )
     end
   end
@@ -1146,7 +1279,7 @@ end
 function M.dispatch(action_id)
   local action = action_registry[action_id]
   if not action then
-    local message = string.format("unknown Kalam action: %s", tostring(action_id))
+    local message = string.format("unknown kalam action: %s", tostring(action_id))
     vim.notify(message, vim.log.levels.WARN)
     return nil, message
   end
@@ -1180,7 +1313,7 @@ function M.command(arguments)
   end
 
   local message = string.format(
-    "unknown Kalam operation: %s (run :Kalam for help)",
+    "unknown kalam operation: %s (run :kalam for help)",
     command
   )
   vim.notify(message, vim.log.levels.WARN)
@@ -1294,9 +1427,22 @@ function M.setup()
       complete = function(arglead, cmdline)
         return M.complete(arglead, cmdline)
       end,
-      desc = "Kalam Neovim-native editor actions",
+      desc = "kalam Neovim-native editor actions",
     }
   )
+
+  -- The registered command is :Kalam only because Neovim requires user
+  -- commands to start with an uppercase letter (:help E183). Every
+  -- documented invocation is lowercase: this cmdline abbreviation expands
+  -- ":kalam" to ":Kalam" when it is the command itself, and never inside
+  -- searches, arguments, or mid-line text.
+  vim.keymap.set("ca", "kalam", function()
+    if vim.fn.getcmdtype() == ":"
+        and vim.fn.getcmdline():match("^%s*kalam$") ~= nil then
+      return "Kalam"
+    end
+    return "kalam"
+  end, { expr = true, desc = "lowercase :kalam command alias" })
 
   vim.api.nvim_create_user_command(
     "NvEditContext",
@@ -1346,6 +1492,20 @@ function M.setup()
       debounce_generation[args.buf] = nil
     end,
   })
+
+  -- Default session layout (docs/buffer_hosted_viewport.md section 5):
+  -- one viewport split, opened once, only inside the Qt editor. A user
+  -- who closes the window keeps a full-width editor; nothing reopens it
+  -- behind their back. Set g:nveditor_auto_viewport = 0 to opt out.
+  local channel = tonumber(vim.g.nveditor_channel_id)
+  if channel ~= nil and channel > 0
+      and vim.g.nveditor_auto_viewport ~= 0 then
+    vim.schedule(function()
+      if #viewport_windows_in_tab() == 0 then
+        M.viewport_open()
+      end
+    end)
+  end
 end
 
 return M

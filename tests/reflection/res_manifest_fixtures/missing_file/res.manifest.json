@@ -1,0 +1,6 @@
+{
+  "$schema": "nveditor.res_manifest/v1",
+  "textures": [
+    { "path": "textures/absent.dds" }
+  ]
+}

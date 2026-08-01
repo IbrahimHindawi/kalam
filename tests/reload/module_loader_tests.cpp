@@ -236,6 +236,9 @@ reload_test_request(
     request.unique_hot_dll_path = hot_path;
     request.create_desc.struct_size = sizeof(Game_Create_Desc);
     request.create_desc.host_api_version = Host_API_Version;
+    request.create_desc.project_root.data = KALAM_TEST_PROJECT_ROOT;
+    request.create_desc.project_root.size =
+        (uint64_t)(sizeof(KALAM_TEST_PROJECT_ROOT) - 1);
     request.documents = context->document;
     request.document_count = 1;
     request.clear_context_bindings = reload_test_clear_context;

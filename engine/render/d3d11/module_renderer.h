@@ -11,7 +11,9 @@ enum
     Module_Renderer_Result_Invalid_Argument,
     Module_Renderer_Result_Shader_Compile_Failed,
     Module_Renderer_Result_Resource_Create_Failed,
-    Module_Renderer_Result_Device_Removed
+    Module_Renderer_Result_Device_Removed,
+    Module_Renderer_Result_Resource_Missing,
+    Module_Renderer_Result_Resource_Invalid
 };
 
 /*
@@ -66,18 +68,38 @@ typedef struct Module_Renderer
     void* depth_disabled_state;
     void* blend_state;
 
+    void* surface_texture;
+    void* surface_texture_view;
+    void* surface_sampler;
+
     int32_t last_hresult;
     uint32_t initialized;
+
+    /*
+     * The manifest resource that failed to load, when create returns
+     * Resource_Missing or Resource_Invalid. Points at generated table
+     * data with static lifetime.
+     */
+    const char* failed_resource_path;
 } Module_Renderer;
 
 #if defined(__cplusplus)
 extern "C" {
 #endif
 
+/*
+ * project_root resolves the manifest resource paths baked into the
+ * generated tables (docs/resource_manifest.md section 6). It is borrowed
+ * for the duration of the call only. A null or empty root, a missing
+ * file, or an unreadable resource fails create with the offending path in
+ * failed_resource_path.
+ */
 Module_Renderer_Result module_renderer_create(
     Module_Renderer* out_renderer,
     void* borrowed_d3d11_device,
-    void* borrowed_d3d11_immediate_context);
+    void* borrowed_d3d11_immediate_context,
+    const char* project_root,
+    uint64_t project_root_size);
 
 void module_renderer_destroy(Module_Renderer* renderer);
 

@@ -55,7 +55,7 @@ In scope for revision 1 of this client:
 - Cursor pixel geometry as a first-class output (popup anchoring).
 - Highlight-table and default-colors delivery to the theme bridge as
   structured events.
-- Behavioural parity with the current editor: every existing `:Kalam`
+- Behavioural parity with the current editor: every existing `:kalam`
   workflow, the context popup, the generated form, quickfix, and the
   acceptance smoke pass unchanged.
 
@@ -114,7 +114,7 @@ modification:
 - `Neovim_Theme_Bridge`: keeps its application-facing API and fallback rules;
   only its input changes from scraped Neovim-Qt state to structured
   `hl_attr_define` / `default_colors_set` / `hl_group_set` events.
-- `editor/neovim/runtime/lua/nveditor.lua` and every `:Kalam` command are
+- `editor/neovim/runtime/lua/nveditor.lua` and every `:kalam` command are
   untouched. Neovim cannot observe which client renders it.
 
 # 3. msgpack codec
@@ -378,6 +378,10 @@ externalization, cmdline/popupmenu/messages externalization, IME preedit
 overlay, cursor blink and smooth scrolling, ligature shaping, and any
 `'guifont'` fallback-list handling beyond a single family.
 
+The multigrid work has since been specified in
+`docs/buffer_hosted_viewport.md`, which promotes it into scope as the
+foundation for hosting the engine viewport inside a Neovim window.
+
 # 13. Risks
 
 - Text rendering fidelity (double-width, emoji, combining marks) is the
@@ -404,7 +408,7 @@ fetched:
    `ctest --preset windows-clang-editor-debug` succeed.
 2. `nveditor.exe --acceptance-smoke` passes with the same commands and
    screenshot surface as before the migration.
-3. Every `:Kalam` command, the context popup (open, preview, commit,
+3. Every `:kalam` command, the context popup (open, preview, commit,
    cancel), the generated form, quickfix population, and colorscheme-driven
    theming behave identically under manual verification with the user's own
    Neovim configuration.

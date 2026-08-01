@@ -67,6 +67,8 @@ private:
     Build_Controller* build_controller_ = nullptr;
     Author_Transaction_Controller* transactions_ = nullptr;
     Engine_Viewport_Widget* viewport_ = nullptr;
+    QVector<qlonglong> viewport_windows_;
+    qlonglong active_viewport_window_ = 0;
     QPointer<Context_Popup> context_popup_;
     QPointer<Generated_Form> generated_form_;
     QVector<Field_Descriptor> context_fields_;
@@ -132,6 +134,7 @@ private:
         QString* error) const;
     void focus_viewport();
     void toggle_viewport();
+    void update_viewport_overlay();
     void handle_viewport_interaction(
         const Viewport_Interaction_Result& result);
     void handle_selection_context(

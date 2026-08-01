@@ -133,6 +133,7 @@ void Neovim_Grid_Widget::attach_ui()
     QVariantMap options;
     options.insert(QStringLiteral("rgb"), true);
     options.insert(QStringLiteral("ext_linegrid"), true);
+    options.insert(QStringLiteral("ext_multigrid"), true);
     client_->call(
         QByteArrayLiteral("nvim_ui_attach"),
         QVariantList() << columns << rows << options);
@@ -168,6 +169,15 @@ void Neovim_Grid_Widget::handle_redraw(const QVariantList& events)
     {
         cursor_dirty_ = true;
     }
+    /*
+     * Layout changes and the flush that publishes them need not arrive in
+     * one batch, so the dirty flag latches across batches exactly as the
+     * cursor's does.
+     */
+    if (summary.window_layout_changed)
+    {
+        layout_dirty_ = true;
+    }
     if (summary.title_changed)
     {
         emit titleChanged(model_.title());
@@ -187,7 +197,8 @@ void Neovim_Grid_Widget::handle_redraw(const QVariantList& events)
     }
 
     /* The flush is the frame boundary; nothing repaints before it. */
-    if (summary.grid_resized || summary.default_colors_changed)
+    if (summary.grid_resized || summary.default_colors_changed ||
+        layout_dirty_)
     {
         model_.take_published_damage();
         update();
@@ -195,6 +206,11 @@ void Neovim_Grid_Widget::handle_redraw(const QVariantList& events)
     else if (model_.has_published_damage())
     {
         update(damage_to_pixels(model_.take_published_damage()));
+    }
+    if (layout_dirty_)
+    {
+        layout_dirty_ = false;
+        emit gridLayoutChanged();
     }
     if (cursor_dirty_)
     {
@@ -613,22 +629,29 @@ void Neovim_Grid_Widget::send_mouse_input(
     const QByteArray& button,
     const QByteArray& action,
     const QByteArray& modifiers,
-    int row,
-    int column)
+    const QPoint& global_cell)
 {
     if (client_ == nullptr)
     {
         return;
     }
+    /* Multigrid mouse input is grid-targeted with grid-local cells. */
+    int local_row = 0;
+    int local_column = 0;
+    const qint64 grid = model_.grid_at(
+        global_cell.y(),
+        global_cell.x(),
+        &local_row,
+        &local_column);
     client_->call(
         QByteArrayLiteral("nvim_input_mouse"),
         QVariantList()
             << button
             << action
             << modifiers
-            << 0
-            << row
-            << column);
+            << grid
+            << local_row
+            << local_column);
 }
 
 void Neovim_Grid_Widget::mousePressEvent(QMouseEvent* event)
@@ -651,8 +674,7 @@ void Neovim_Grid_Widget::mousePressEvent(QMouseEvent* event)
         translation.button,
         translation.action,
         translation.modifiers,
-        cell.y(),
-        cell.x());
+        cell);
     event->accept();
 }
 
@@ -678,8 +700,7 @@ void Neovim_Grid_Widget::mouseReleaseEvent(QMouseEvent* event)
         translation.button,
         translation.action,
         translation.modifiers,
-        cell.y(),
-        cell.x());
+        cell);
     event->accept();
 }
 
@@ -723,8 +744,7 @@ void Neovim_Grid_Widget::mouseMoveEvent(QMouseEvent* event)
         translation.button,
         translation.action,
         translation.modifiers,
-        cell.y(),
-        cell.x());
+        cell);
     event->accept();
 }
 
@@ -745,8 +765,7 @@ void Neovim_Grid_Widget::wheelEvent(QWheelEvent* event)
         translation.button,
         translation.action,
         translation.modifiers,
-        cell.y(),
-        cell.x());
+        cell);
     event->accept();
 }
 

@@ -234,6 +234,13 @@ typedef struct Game_Create_Desc
 
     void* host_user;
     void (*host_log)(void* host_user, uint32_t level, String_View message);
+
+    /*
+     * Project root for manifest resources (docs/resource_manifest.md).
+     * The module resolves generated resource-table paths against it and
+     * borrows the bytes for the create call only.
+     */
+    String_View project_root;
 } Game_Create_Desc;
 
 typedef uint32_t Game_Viewport_Interaction_Kind;

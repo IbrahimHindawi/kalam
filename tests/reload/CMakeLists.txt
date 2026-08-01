@@ -119,6 +119,11 @@ target_link_libraries(
         kernel32
 )
 kalam_apply_engine_policy(reload_module_loader_tests)
+target_compile_definitions(
+    reload_module_loader_tests
+    PRIVATE
+        KALAM_TEST_PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
+)
 
 add_dependencies(
     reload_module_loader_tests
@@ -177,6 +182,11 @@ if(TARGET game_module AND TARGET d3d11_viewport_host)
             kernel32
     )
     kalam_apply_engine_policy(reload_real_module_rejection_render)
+target_compile_definitions(
+    reload_real_module_rejection_render
+    PRIVATE
+        KALAM_TEST_PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
+)
     add_dependencies(
         reload_real_module_rejection_render
         game_module

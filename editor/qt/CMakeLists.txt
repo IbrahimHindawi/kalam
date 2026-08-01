@@ -112,6 +112,7 @@ kalam_stage_editor_runtime(
     nveditor
     "${CMAKE_SOURCE_DIR}/editor/neovim/runtime"
 )
+kalam_stage_resources(nveditor)
 
 if(WIN32)
     if(NOT TARGET Qt6::windeployqt)

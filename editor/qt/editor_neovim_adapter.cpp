@@ -393,6 +393,20 @@ void Editor_Neovim_Adapter::handle_notification(
     {
         emit buildReloadRequested();
     }
+    else if (name == QByteArrayLiteral("nveditor.viewport_windows"))
+    {
+        QVector<qlonglong> windows;
+        const QVariantList window_entries =
+            payload.value(QStringLiteral("windows")).toList();
+        windows.reserve(window_entries.size());
+        for (const QVariant& entry : window_entries)
+        {
+            windows.append(entry.toLongLong());
+        }
+        emit viewportWindowsChanged(
+            windows,
+            payload.value(QStringLiteral("active")).toLongLong());
+    }
     else if (name == QByteArrayLiteral("nveditor.document_valid"))
     {
         emit validDocumentReceived(snapshot_from_map(payload));

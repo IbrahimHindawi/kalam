@@ -1,6 +1,7 @@
 #include "game_api.h"
 
 #include "authored_state.h"
+#include "authored_world.h"
 #include "author_schemas.generated.h"
 #include "module_renderer.h"
 
@@ -13,7 +14,7 @@
 
 typedef struct Game_Instance
 {
-    Authored_State authored_state;
+    Authored_World* authored_world;
     Module_Renderer renderer;
     uint64_t fixed_tick_count;
 
@@ -73,30 +74,6 @@ game_renderer_fail(
         out_error);
 }
 
-static const Authored_Document*
-game_latest_scene_document(const Authored_State* state)
-{
-    const Authored_Document* result = 0;
-    uint64_t latest_revision = 0;
-    uint32_t index = 0;
-
-    if (state == 0)
-    {
-        return 0;
-    }
-    for (index = 0; index < Authored_Document_Capacity; index += 1)
-    {
-        const Authored_Document* document = &state->documents[index];
-        if (document->active != 0 &&
-            document->kind == Authored_Document_Scene &&
-            document->revision >= latest_revision)
-        {
-            latest_revision = document->revision;
-            result = document;
-        }
-    }
-    return result;
-}
 
 static void
 game_clear_selection(Game_Instance* game)
@@ -242,7 +219,9 @@ game_create(
         desc->struct_size < (uint32_t)sizeof(*desc) ||
         desc->host_api_version != Host_API_Version ||
         desc->d3d11_device == 0 ||
-        desc->d3d11_immediate_context == 0)
+        desc->d3d11_immediate_context == 0 ||
+        desc->project_root.data == 0 ||
+        desc->project_root.size == 0)
     {
         return game_fail(
             Game_Result_Invalid_Argument,
@@ -264,15 +243,40 @@ game_create(
             out_error);
     }
 
-    authored_state_init(&game->authored_state);
+    game->authored_world = authored_world_create();
+    if (game->authored_world == 0)
+    {
+        HeapFree(GetProcessHeap(), 0, game);
+        return game_fail(
+            Game_Result_Create_Failed,
+            "could not create the authored entity world",
+            "",
+            out_error);
+    }
     renderer_result = module_renderer_create(
         &game->renderer,
         desc->d3d11_device,
-        desc->d3d11_immediate_context);
+        desc->d3d11_immediate_context,
+        desc->project_root.data,
+        desc->project_root.size);
     if (renderer_result != Module_Renderer_Result_Ok)
     {
+        const char* failed_path = game->renderer.failed_resource_path;
         module_renderer_destroy(&game->renderer);
+        authored_world_destroy(game->authored_world);
         HeapFree(GetProcessHeap(), 0, game);
+        if (failed_path != 0)
+        {
+            return game_fail(
+                renderer_result == Module_Renderer_Result_Resource_Missing
+                    ? Game_Result_Create_Failed
+                    : Game_Result_Invalid_Document,
+                renderer_result == Module_Renderer_Result_Resource_Missing
+                    ? "a manifest resource is missing"
+                    : "a manifest resource could not be loaded",
+                failed_path,
+                out_error);
+        }
         return game_renderer_fail(renderer_result, out_error);
     }
 
@@ -299,7 +303,8 @@ game_destroy(void* game_pointer)
     }
 
     module_renderer_destroy(&game->renderer);
-    memset(&game->authored_state, 0, sizeof(game->authored_state));
+    authored_world_destroy(game->authored_world);
+    game->authored_world = 0;
     game->fixed_tick_count = 0;
     HeapFree(GetProcessHeap(), 0, game);
 }
@@ -378,9 +383,9 @@ game_render(
     render_target.height = target->height;
     render_target.generation = target->generation;
 
-    scene = authored_state_latest_scene(&game->authored_state);
+    scene = authored_world_latest_scene(game->authored_world);
     post_process =
-        authored_state_latest_post_process(&game->authored_state);
+        authored_world_latest_post_process(game->authored_world);
     if (post_process != 0)
     {
         memset(&render_post_process, 0, sizeof(render_post_process));
@@ -467,7 +472,7 @@ game_viewport_interaction(
             out_error);
     }
 
-    document = game_latest_scene_document(&game->authored_state);
+    document = authored_world_latest_scene_document(game->authored_world);
     scene = document != 0 ? &document->value.scene : 0;
     if (scene != 0)
     {
@@ -490,8 +495,8 @@ game_viewport_interaction(
 
         if (game->gizmo_active != 0)
         {
-            (void)authored_state_preview_field(
-                &game->authored_state,
+            (void)authored_world_preview_field(
+                game->authored_world,
                 game->selected_document_id,
                 game->selected_object_id,
                 game->selected_field_id,
@@ -515,8 +520,8 @@ game_viewport_interaction(
     {
         if (game->gizmo_active != 0)
         {
-            (void)authored_state_preview_field(
-                &game->authored_state,
+            (void)authored_world_preview_field(
+                game->authored_world,
                 game->selected_document_id,
                 game->selected_object_id,
                 game->selected_field_id,
@@ -576,8 +581,8 @@ game_viewport_interaction(
         }
         if (best_distance <= 144.0f)
         {
-            result = authored_state_read_field(
-                &game->authored_state,
+            result = authored_world_read_field(
+                game->authored_world,
                 game->selected_document_id,
                 game->selected_object_id,
                 game->selected_field_id,
@@ -621,8 +626,8 @@ game_viewport_interaction(
                 0.007f;
         }
 
-        result = authored_state_preview_field(
-            &game->authored_state,
+        result = authored_world_preview_field(
+            game->authored_world,
             game->selected_document_id,
             game->selected_object_id,
             game->selected_field_id,
@@ -659,8 +664,8 @@ game_viewport_interaction(
     {
         if (game->gizmo_active != 0)
         {
-            result = authored_state_preview_field(
-                &game->authored_state,
+            result = authored_world_preview_field(
+                game->authored_world,
                 game->selected_document_id,
                 game->selected_object_id,
                 game->selected_field_id,
@@ -709,8 +714,8 @@ game_apply_document(
             "",
             out_error);
     }
-    result = authored_state_apply_document(
-        &game->authored_state,
+    result = authored_world_apply_document(
+        game->authored_world,
         state,
         out_error);
     if (result == Game_Result_Ok &&
@@ -718,7 +723,7 @@ game_apply_document(
         game->selected_document_id == state->document_id)
     {
         const Authored_Document* scene_document =
-            game_latest_scene_document(&game->authored_state);
+            authored_world_latest_scene_document(game->authored_world);
         if (scene_document != 0 &&
             scene_document->document_id == state->document_id)
         {
@@ -755,8 +760,8 @@ game_remove_document(
     {
         game_clear_selection(game);
     }
-    return authored_state_remove_document(
-        &game->authored_state,
+    return authored_world_remove_document(
+        game->authored_world,
         document_id,
         out_error);
 }
@@ -817,8 +822,8 @@ game_read_author_field(
             "",
             out_error);
     }
-    return authored_state_read_field(
-        &game->authored_state,
+    return authored_world_read_field(
+        game->authored_world,
         document_id,
         object_id,
         field_id,
@@ -846,8 +851,8 @@ game_preview_author_field(
             "",
             out_error);
     }
-    return authored_state_preview_field(
-        &game->authored_state,
+    return authored_world_preview_field(
+        game->authored_world,
         document_id,
         object_id,
         field_id,

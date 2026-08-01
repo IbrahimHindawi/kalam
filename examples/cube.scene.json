@@ -1,10 +1,10 @@
 {
   "$schema": "nveditor.scene/v1",
   "cube": {
-    "color": [0.80,0.20,1.00,1.00],
+    "color": [0.95,0.26,1.00,1.00],
     "transform": {
       "translation": [0.00,1.00,0.00],
-      "rotation_degrees": [0.0,23.0,110.0],
+      "rotation_degrees": [0.0,23.0,10.0],
       "scale": [1.00,1.00,1.00]
     }
   }

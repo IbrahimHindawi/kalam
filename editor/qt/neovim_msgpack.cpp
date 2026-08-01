@@ -761,6 +761,20 @@ Msgpack_Decode_Result msgpack_decode(
     return result;
 }
 
+qint64 msgpack_ext_handle_value(const Msgpack_Ext& ext, bool* ok)
+{
+    const Msgpack_Decode_Result decoded = msgpack_decode(ext.payload);
+    const bool is_integer = decoded.status == Msgpack_Status::Ok &&
+        decoded.bytes_consumed == ext.payload.size() &&
+        (decoded.value.userType() == QMetaType::LongLong ||
+         decoded.value.userType() == QMetaType::ULongLong);
+    if (ok != nullptr)
+    {
+        *ok = is_integer;
+    }
+    return is_integer ? decoded.value.toLongLong() : -1;
+}
+
 const char* msgpack_status_string(Msgpack_Status status)
 {
     switch (status)

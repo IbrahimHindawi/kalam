@@ -743,6 +743,9 @@ test_reload_resize_debug_stress(const char* module_path)
         game_desc.d3d11_device = host.device;
         game_desc.d3d11_immediate_context =
             host.immediate_context;
+        game_desc.project_root.data = KALAM_TEST_PROJECT_ROOT;
+        game_desc.project_root.size =
+            (uint64_t)(sizeof(KALAM_TEST_PROJECT_ROOT) - 1);
         game_result = api.create(
             &game_desc,
             &game,

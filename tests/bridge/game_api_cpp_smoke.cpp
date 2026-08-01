@@ -80,7 +80,8 @@ static_assert(offsetof(Game_Create_Desc, d3d11_device) == 8, "create device offs
 static_assert(offsetof(Game_Create_Desc, d3d11_immediate_context) == 16, "create context offset");
 static_assert(offsetof(Game_Create_Desc, host_user) == 24, "create host user offset");
 static_assert(offsetof(Game_Create_Desc, host_log) == 32, "create host log offset");
-static_assert(sizeof(Game_Create_Desc) == 40, "create descriptor size");
+static_assert(offsetof(Game_Create_Desc, project_root) == 40, "create project root offset");
+static_assert(sizeof(Game_Create_Desc) == 56, "create descriptor size");
 static_assert(alignof(Game_Create_Desc) == 8, "create descriptor alignment");
 
 static_assert(offsetof(Game_API, api_version) == 0, "API version offset");
@@ -105,8 +106,9 @@ static_assert(offsetof(Game_Create_Desc, d3d11_device) == 8, "create device offs
 static_assert(offsetof(Game_Create_Desc, d3d11_immediate_context) == 12, "create context offset");
 static_assert(offsetof(Game_Create_Desc, host_user) == 16, "create host user offset");
 static_assert(offsetof(Game_Create_Desc, host_log) == 20, "create host log offset");
-static_assert(sizeof(Game_Create_Desc) == 24, "create descriptor size");
-static_assert(alignof(Game_Create_Desc) == 4, "create descriptor alignment");
+static_assert(offsetof(Game_Create_Desc, project_root) == 24, "create project root offset");
+static_assert(sizeof(Game_Create_Desc) == 40, "create descriptor size");
+static_assert(alignof(Game_Create_Desc) == 8, "create descriptor alignment");
 
 static_assert(offsetof(Game_API, api_version) == 0, "API version offset");
 static_assert(offsetof(Game_API, struct_size) == 4, "API size offset");
