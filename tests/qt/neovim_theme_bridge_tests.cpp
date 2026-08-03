@@ -10,6 +10,7 @@
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QLabel>
+#include <QScrollArea>
 #include <QKeyEvent>
 
 namespace
@@ -398,6 +399,102 @@ void test_modal_context_popup(QApplication* application)
         QStringLiteral("context popup has no raw or hidden Neovim staging buffer"));
 }
 
+void test_generated_form_fits_its_schema(QApplication* application)
+{
+    Kalam::Editor::Document_Handle document;
+    document.document_id = 1;
+    document.root_object_id = 2;
+    document.path = QStringLiteral("scene.json");
+
+    Kalam::Editor::Field_Descriptor transform_field;
+    transform_field.id = 1;
+    transform_field.name = QByteArrayLiteral("transform");
+    transform_field.kind = Author_Field_Transform;
+    Kalam::Editor::Author_Value_Owned transform_value;
+    transform_value.kind = Author_Field_Transform;
+    transform_value.transform.scale[0] = 1.0f;
+    transform_value.transform.scale[1] = 1.0f;
+    transform_value.transform.scale[2] = 1.0f;
+
+    Kalam::Editor::Field_Descriptor color_field;
+    color_field.id = 2;
+    color_field.name = QByteArrayLiteral("color");
+    color_field.kind = Author_Field_Color4;
+    Kalam::Editor::Author_Value_Owned color_value;
+    color_value.kind = Author_Field_Color4;
+    color_value.f32[3] = 1.0f;
+
+    /*
+     * A generated form is sized to its schema, so no field is ever cut off
+     * horizontally. The width depends on the schema and on whatever font
+     * Neovim asked for, which is exactly why a fixed size failed.
+     *
+     * The schema below is deliberately wider than the old hardcoded 460px:
+     * with a narrower one this check passes even against the bug, because
+     * the offscreen platform has no font database and its fallback metrics
+     * are small enough to fit. Verified by reintroducing the fixed size
+     * and confirming these assertions fail.
+     */
+        Kalam::Editor::Field_Descriptor wide_field;
+        wide_field.id = 3;
+        wide_field.name =
+            QByteArrayLiteral("chromatic_aberration_strength_horizontal");
+        wide_field.group = QByteArrayLiteral("post_process/lens/distortion");
+        wide_field.kind = Author_Field_Transform;
+        Kalam::Editor::Author_Value_Owned wide_value;
+        wide_value.kind = Author_Field_Transform;
+        wide_value.transform.scale[0] = 1.0f;
+        wide_value.transform.scale[1] = 1.0f;
+        wide_value.transform.scale[2] = 1.0f;
+
+        Kalam::Editor::Schema_Descriptor wide_schema;
+        wide_schema.fields = {
+            transform_field, color_field, wide_field, wide_field};
+        /*
+         * Heap-allocated on purpose: Generated_Form sets WA_DeleteOnClose,
+         * so close() deletes it. Closing a stack instance would delete a
+         * stack object.
+         */
+        auto* wide_form = new Kalam::Editor::Generated_Form(
+            document,
+            wide_schema,
+            {transform_value, color_value, wide_value, wide_value});
+        wide_form->show();
+        application->processEvents();
+
+        QScrollArea* scroll = wide_form->findChild<QScrollArea*>();
+        check(
+            scroll != nullptr,
+            QStringLiteral("the generated form scrolls its field area"));
+        if (scroll != nullptr)
+        {
+            check(
+                scroll->horizontalScrollBarPolicy() == Qt::ScrollBarAlwaysOff,
+                QStringLiteral("the generated form never scrolls sideways"));
+            QWidget* contents = scroll->widget();
+            const int needed =
+                contents == nullptr ? 0 : contents->sizeHint().width();
+            /*
+             * Guard the guard: if the fixture stops being wider than the
+             * old fixed size, this test silently stops proving anything.
+             */
+            check(
+                needed > 460,
+                QStringLiteral("the fixture is wide enough to detect a "
+                               "fixed-width regression (needs %1)")
+                    .arg(needed));
+            check(
+                contents != nullptr &&
+                    scroll->viewport()->width() >= needed,
+                QStringLiteral("the field area is wide enough for every "
+                               "field (viewport %1, needs %2)")
+                    .arg(scroll->viewport()->width())
+                    .arg(needed));
+        }
+        wide_form->close();
+        application->processEvents();
+}
+
 void test_modal_generated_form(QApplication* application)
 {
     Kalam::Editor::Document_Handle document;
@@ -434,6 +531,7 @@ void test_modal_generated_form(QApplication* application)
     form.show();
     form.focus_modal();
     application->processEvents();
+
 
     auto send_key = [application](
         QWidget* target,
@@ -505,6 +603,7 @@ int main(int argument_count, char** arguments)
     test_editor_font_is_shared_with_qt_surfaces();
     test_fallbacks_and_application_refresh(&application);
     test_modal_context_popup(&application);
+    test_generated_form_fits_its_schema(&application);
     test_modal_generated_form(&application);
     if (failures == 0)
     {

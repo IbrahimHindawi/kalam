@@ -86,6 +86,11 @@ private:
     void execute_command();
     void move_field(int direction);
     void move_component(int direction);
+    /*
+     * Sizes the window to the generated fields so nothing is cut off
+     * horizontally. Called once, after the form is fully populated.
+     */
+    void fit_to_contents(QWidget* contents);
     void set_active_field(qsizetype field_index);
     void refresh_modal_selection();
     void refresh_statusline();

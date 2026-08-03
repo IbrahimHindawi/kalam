@@ -10,7 +10,9 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -35,7 +37,6 @@ Generated_Form::Generated_Form(
     setModal(false);
     setAttribute(Qt::WA_DeleteOnClose);
     setFocusPolicy(Qt::StrongFocus);
-    resize(460, 520);
 
     auto* root_layout = new QVBoxLayout(this);
     root_layout->setContentsMargins(1, 1, 1, 1);
@@ -66,6 +67,12 @@ Generated_Form::Generated_Form(
 
     scroll_area_ = new QScrollArea(this);
     scroll_area_->setWidgetResizable(true);
+    /*
+     * A field must never be cut off horizontally: the form is sized to its
+     * content instead (see fit_to_contents), so a horizontal bar would only
+     * ever mean the sizing failed.
+     */
+    scroll_area_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* contents = new QWidget(scroll_area_);
     auto* form = new QFormLayout(contents);
 
@@ -158,6 +165,7 @@ Generated_Form::Generated_Form(
 
     set_active_field(editors_.isEmpty() ? -1 : 0);
     refresh_statusline();
+    fit_to_contents(contents);
 }
 
 const Document_Handle& Generated_Form::document() const
@@ -518,6 +526,50 @@ void Generated_Form::move_component(int direction)
         return;
     active_component_ = qBound(0, active_component_ + direction, count - 1);
     refresh_modal_selection();
+}
+
+void Generated_Form::fit_to_contents(QWidget* contents)
+{
+    if (contents == nullptr || scroll_area_ == nullptr)
+    {
+        return;
+    }
+
+    /*
+     * Size the window to the fields rather than to a fixed guess: the
+     * width of a generated form depends on the schema and on whatever
+     * font Neovim asked for, so a hardcoded width clipped content as soon
+     * as either changed. Width always fits; height fits when the screen
+     * allows and otherwise scrolls, which is the one bar worth keeping.
+     */
+    contents->adjustSize();
+    const QSize content_hint = contents->sizeHint();
+    const int frame = 2 * scroll_area_->frameWidth();
+    const int bar_width = scroll_area_->verticalScrollBar() != nullptr
+        ? scroll_area_->verticalScrollBar()->sizeHint().width()
+        : 0;
+
+    scroll_area_->setMinimumWidth(content_hint.width() + frame + bar_width);
+    scroll_area_->setMinimumHeight(
+        qMin(content_hint.height() + frame, 900));
+
+    adjustSize();
+
+    const QScreen* screen = this->screen();
+    if (screen != nullptr)
+    {
+        const QRect available = screen->availableGeometry();
+        resize(
+            qMin(width(), available.width() - 80),
+            qMin(height(), available.height() - 80));
+    }
+
+    /*
+     * The minimum is only needed to drive the initial size; keeping it
+     * would stop the user shrinking the window afterwards.
+     */
+    scroll_area_->setMinimumWidth(0);
+    scroll_area_->setMinimumHeight(0);
 }
 
 void Generated_Form::set_active_field(qsizetype field_index)
