@@ -1,0 +1,51 @@
+QDialog {
+    background: palette(window);
+}
+QTreeView, QPlainTextEdit, QLineEdit, QComboBox {
+    border: 1px solid #414347;
+    background: palette(base);
+}
+QLineEdit, QComboBox {
+    min-height: 22px;
+    padding: 2px 6px;
+}
+QTreeView:focus, QPlainTextEdit:focus, QLineEdit:focus, QComboBox:focus {
+    border-color: palette(accent);
+}
+QWidget#kalam-inline-value QLineEdit {
+    min-height: 18px;
+    padding: 1px 4px;
+    background: #202124;
+}
+QWidget#kalam-inline-value QLineEdit[invalid="true"] {
+    border-color: #dc806e;
+}
+QTreeView::item {
+    min-height: 23px;
+    padding: 1px 4px;
+    border-bottom: 1px solid #303236;
+}
+QTreeView::item:hover:!selected {
+    background: #35373b;
+}
+QHeaderView::section {
+    background: #35373b;
+    color: palette(window-text);
+    border: 0;
+    border-right: 1px solid #46484c;
+    border-bottom: 1px solid #161719;
+    padding: 5px 8px;
+    font-weight: 600;
+}
+QPushButton {
+    background: palette(button);
+    min-height: 23px;
+    padding: 2px 10px;
+    border: 1px solid #505257;
+    border-radius: 3px;
+}
+QPushButton:hover { background: #494b50; }
+QPushButton:pressed { background: #282a2d; }
+QPushButton:focus, QPushButton:default { border-color: palette(accent); }
+QPushButton#apply-entity-edit { background: #584334; border-color: #9d704a; }
+QPushButton#apply-entity-edit:hover { background: #6b503b; }

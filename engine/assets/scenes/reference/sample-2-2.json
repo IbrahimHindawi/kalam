@@ -1,0 +1,48 @@
+{
+  "id": "sample-2-2",
+  "components": {
+    "transform": {
+      "position": {
+        "value": [0, 0.72, 1.7],
+        "type": "vec3",
+        "default": [0, 0.72, 1.7],
+        "min": -1000,
+        "max": 1000
+      },
+      "scale": {
+        "value": 0.7,
+        "type": "number",
+        "default": 0.7,
+        "min": 0.01,
+        "max": 100
+      }
+    },
+    "render": {
+      "mesh": "sphere",
+      "material": {
+        "version": 1,
+        "base_color": {
+          "value": [0.86, 0.47, 0.19, 1],
+          "type": "vec4",
+          "default": [0.86, 0.47, 0.19, 1],
+          "min": 0,
+          "max": 1
+        },
+        "metallic": {
+          "value": 1,
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 1
+        },
+        "roughness": {
+          "value": 0.5,
+          "type": "number",
+          "default": 0.5,
+          "min": 0,
+          "max": 1
+        }
+      }
+    }
+  }
+}

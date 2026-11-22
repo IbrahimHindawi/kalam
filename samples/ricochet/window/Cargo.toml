@@ -1,0 +1,20 @@
+[package]
+name = "ricochet"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+test = false
+doctest = false
+
+[features]
+editor = ["kalam-host/editor"]
+
+[dependencies]
+bumpalo = { version = "3", features = ["collections"] }
+glam = "0.30"
+kalam-host = { path = "../../../engine/host" }
+kalam-ricochet = { path = ".." }
+kalam-runtime = { path = "../../../engine/runtime" }

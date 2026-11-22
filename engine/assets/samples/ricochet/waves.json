@@ -1,0 +1,50 @@
+[
+  {
+    "chasers": {
+      "value": 1,
+      "type": "integer",
+      "default": 1,
+      "min": 0,
+      "max": 24
+    },
+    "turrets": {
+      "value": 1,
+      "type": "integer",
+      "default": 1,
+      "min": 0,
+      "max": 24
+    }
+  },
+  {
+    "chasers": {
+      "value": 3,
+      "type": "integer",
+      "default": 3,
+      "min": 0,
+      "max": 24
+    },
+    "turrets": {
+      "value": 1,
+      "type": "integer",
+      "default": 1,
+      "min": 0,
+      "max": 24
+    }
+  },
+  {
+    "chasers": {
+      "value": 4,
+      "type": "integer",
+      "default": 4,
+      "min": 0,
+      "max": 24
+    },
+    "turrets": {
+      "value": 2,
+      "type": "integer",
+      "default": 2,
+      "min": 0,
+      "max": 24
+    }
+  }
+]

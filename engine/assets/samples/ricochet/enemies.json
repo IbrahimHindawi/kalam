@@ -1,0 +1,51 @@
+{
+  "chaser_speed": {
+    "value": 2.4,
+    "type": "number",
+    "default": 2.4,
+    "min": 0.25,
+    "max": 10
+  },
+  "chaser_health": {
+    "value": 34.0,
+    "type": "number",
+    "default": 34.0,
+    "min": 1,
+    "max": 500
+  },
+  "chaser_damage": {
+    "value": 18.0,
+    "type": "number",
+    "default": 18.0,
+    "min": 1,
+    "max": 100
+  },
+  "turret_health": {
+    "value": 68.0,
+    "type": "number",
+    "default": 68.0,
+    "min": 1,
+    "max": 500
+  },
+  "turret_cooldown": {
+    "value": 1.75,
+    "type": "number",
+    "default": 1.75,
+    "min": 0.3,
+    "max": 10
+  },
+  "turret_projectile_speed": {
+    "value": 5.5,
+    "type": "number",
+    "default": 5.5,
+    "min": 1,
+    "max": 40
+  },
+  "turret_damage": {
+    "value": 16.0,
+    "type": "number",
+    "default": 16.0,
+    "min": 1,
+    "max": 100
+  }
+}

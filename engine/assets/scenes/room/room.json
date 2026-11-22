@@ -1,0 +1,41 @@
+{
+  "id": "room",
+  "components": {
+    "transform": {
+      "position": {
+        "value": [0, 0, 0],
+        "type": "vec3",
+        "default": [0, 0, 0],
+        "min": -1000,
+        "max": 1000
+      }
+    },
+    "render": {
+      "mesh": "room-shell",
+      "material": {
+        "version": 1,
+        "base_color": {
+          "value": [0.29, 0.39, 0.44, 1],
+          "type": "vec4",
+          "default": [0.29, 0.39, 0.44, 1],
+          "min": 0,
+          "max": 1
+        },
+        "metallic": {
+          "value": 0,
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 1
+        },
+        "roughness": {
+          "value": 0.88,
+          "type": "number",
+          "default": 0.88,
+          "min": 0,
+          "max": 1
+        }
+      }
+    }
+  }
+}

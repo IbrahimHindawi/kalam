@@ -1,0 +1,23 @@
+{
+  "bounce_color": {
+    "value": [0.25, 0.87, 1.0],
+    "type": "vec3",
+    "default": [0.25, 0.87, 1.0],
+    "min": 0,
+    "max": 1
+  },
+  "hit_color": {
+    "value": [1.0, 0.53, 0.12],
+    "type": "vec3",
+    "default": [1.0, 0.53, 0.12],
+    "min": 0,
+    "max": 1
+  },
+  "duration": {
+    "value": 0.16,
+    "type": "number",
+    "default": 0.16,
+    "min": 0.025,
+    "max": 2
+  }
+}

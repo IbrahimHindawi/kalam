@@ -1,0 +1,48 @@
+{
+  "id": "side-prop",
+  "components": {
+    "transform": {
+      "position": {
+        "value": [-2, 0.55, -2],
+        "type": "vec3",
+        "default": [-2, 0.55, -2],
+        "min": -1000,
+        "max": 1000
+      },
+      "scale": {
+        "value": 0.55,
+        "type": "number",
+        "default": 0.55,
+        "min": 0.01,
+        "max": 100
+      }
+    },
+    "render": {
+      "mesh": "sphere",
+      "material": {
+        "version": 1,
+        "base_color": {
+          "value": [0.0, 0.53, 0.25, 1],
+          "type": "vec4",
+          "default": [0.0, 0.53, 0.25, 1],
+          "min": 0,
+          "max": 1
+        },
+        "metallic": {
+          "value": 1.0,
+          "type": "number",
+          "default": 1.0,
+          "min": 0,
+          "max": 1
+        },
+        "roughness": {
+          "value": 0.29,
+          "type": "number",
+          "default": 0.29,
+          "min": 0,
+          "max": 1
+        }
+      }
+    }
+  }
+}

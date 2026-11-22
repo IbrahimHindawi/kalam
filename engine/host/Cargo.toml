@@ -1,0 +1,21 @@
+[package]
+name = "kalam-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+editor = ["dep:serde_json"]
+
+[dependencies]
+kalam-runtime = { path = "../runtime" }
+glam = "0.30"
+bumpalo = { version = "3", features = ["collections"] }
+font8x8 = "0.3.1"
+serde_json = { version = "1", features = ["preserve_order"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+rmpv = "1.3.1"

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "base_color": {
+    "value": [1.0, 0.8, 0.6, 1.0],
+    "type": "vec4",
+    "default": [1.0, 0.8, 0.6, 1.0],
+    "min": 0,
+    "max": 1
+  },
+  "metallic": {
+    "value": 0.2,
+    "type": "number",
+    "default": 0.2,
+    "min": 0,
+    "max": 1
+  },
+  "roughness": {
+    "value": 0.42,
+    "type": "number",
+    "default": 0.42,
+    "min": 0,
+    "max": 1
+  },
+  "base_texture": "fixture/asymmetric",
+  "metallic_roughness_texture": "fixture/neutral"
+}

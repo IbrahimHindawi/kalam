@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "input",
+      "buttons": [
+        "forward"
+      ]
+    },
+    {
+      "op": "step",
+      "ticks": {
+        "value": 120,
+        "type": "integer",
+        "default": 120,
+        "min": 0,
+        "max": 120000
+      }
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "set_speed",
+      "value": {
+        "value": 2.4,
+        "type": "number",
+        "default": 2.4,
+        "min": 0.1,
+        "max": 20
+      }
+    },
+    {
+      "op": "step",
+      "ticks": {
+        "value": 120,
+        "type": "integer",
+        "default": 120,
+        "min": 0,
+        "max": 120000
+      }
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "step",
+      "ticks": {
+        "value": 120,
+        "type": "integer",
+        "default": 120,
+        "min": 0,
+        "max": 120000
+      }
+    },
+    {
+      "op": "input",
+      "buttons": []
+    }
+  ]
+}

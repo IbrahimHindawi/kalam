@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "camera": {
+    "target": {
+      "value": [0, 0.7, 0],
+      "type": "vec3",
+      "default": [0, 0.7, 0],
+      "min": -1000,
+      "max": 1000
+    },
+    "distance": {
+      "value": 10,
+      "type": "number",
+      "default": 10,
+      "min": 0.25,
+      "max": 50
+    },
+    "yaw": {
+      "value": 0.24,
+      "type": "number",
+      "default": 0.24,
+      "min": -360,
+      "max": 360
+    },
+    "pitch": {
+      "value": 0.49,
+      "type": "number",
+      "default": 0.49,
+      "min": 0.1,
+      "max": 1.5
+    },
+    "fov_y_degrees": {
+      "value": 48,
+      "type": "number",
+      "default": 48,
+      "min": 15,
+      "max": 100
+    }
+  },
+  "sun": {
+    "direction": {
+      "value": [-3, 8, 4],
+      "type": "vec3",
+      "default": [-3, 8, 4],
+      "min": -1000,
+      "max": 1000
+    },
+    "radiance": {
+      "value": [3, 3, 3],
+      "type": "vec3",
+      "default": [3, 3, 3],
+      "min": 0,
+      "max": 64
+    }
+  },
+  "exposure": {
+    "value": 1,
+    "type": "number",
+    "default": 1,
+    "min": 0.01,
+    "max": 32
+  },
+  "walk": {
+    "min_xz": {
+      "value": [-4, -4],
+      "type": "vec2",
+      "default": [-4, -4],
+      "min": -1000,
+      "max": 1000
+    },
+    "max_xz": {
+      "value": [4, 4],
+      "type": "vec2",
+      "default": [4, 4],
+      "min": -1000,
+      "max": 1000
+    },
+    "spawn_xz": {
+      "value": [0, 3.4],
+      "type": "vec2",
+      "default": [0, 3.4],
+      "min": -1000,
+      "max": 1000
+    },
+    "floor_y": {
+      "value": 0,
+      "type": "number",
+      "default": 0,
+      "min": -1000,
+      "max": 1000
+    },
+    "speed": {
+      "value": 3.2,
+      "type": "number",
+      "default": 3.2,
+      "min": 0.1,
+      "max": 20
+    }
+  },
+  "meshes": {
+    "room-shell": "room.glb"
+  },
+  "entities": [
+    "room",
+    "centerpiece",
+    "side-prop"
+  ]
+}

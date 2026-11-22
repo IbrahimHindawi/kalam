@@ -1,0 +1,13 @@
+version = 1
+
+[assets.repair_bot]
+path = "samples/ricochet/repair-bot.glb"
+height = 0.92
+forward = "+x"
+clips = { idle = "idle", walk = "walk" }
+
+[assets.chaser_bot]
+path = "samples/ricochet/chaser-bot.glb"
+height = 0.95
+forward = "+x"
+clips = { walk = "walk" }

@@ -1,7 +1,0 @@
-{
-  "$schema": "nveditor.post_process/v1",
-  "exposure": 1.000,
-  "bloom_threshold": 0.800,
-  "vignette": 0.150,
-  "tint": [1.000, 1.000, 1.000, 1.000]
-}

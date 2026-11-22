@@ -1,0 +1,5 @@
+[
+  {"key": "transform", "label": "Transform", "default": {"position": [0, 1, 0], "scale": 1, "yaw_degrees": 0}},
+  {"key": "render", "label": "Render", "default": {"mesh": "sphere", "material": "reference"}},
+  {"key": "spin", "label": "Spin", "default": {"degrees_per_second": 30}}
+]

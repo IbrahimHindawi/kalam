@@ -1,0 +1,41 @@
+{
+  "id": "ground",
+  "components": {
+    "transform": {
+      "position": {
+        "value": [0, 0, 0],
+        "type": "vec3",
+        "default": [0, 0, 0],
+        "min": -1000,
+        "max": 1000
+      }
+    },
+    "render": {
+      "mesh": "floor",
+      "material": {
+        "version": 1,
+        "base_color": {
+          "value": [0.28, 0.31, 0.35, 1],
+          "type": "vec4",
+          "default": [0.28, 0.31, 0.35, 1],
+          "min": 0,
+          "max": 1
+        },
+        "metallic": {
+          "value": 0,
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 1
+        },
+        "roughness": {
+          "value": 0.8,
+          "type": "number",
+          "default": 0.8,
+          "min": 0,
+          "max": 1
+        }
+      }
+    }
+  }
+}

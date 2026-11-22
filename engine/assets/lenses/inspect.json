@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "title": {
+    "value": "Scene controls",
+    "type": "string",
+    "default": "Scene controls"
+  },
+  "sliders": [
+    {
+      "label": {
+        "value": "Player speed",
+        "type": "string",
+        "default": "Player speed"
+      },
+      "bind": "walk.speed"
+    },
+    {
+      "label": {
+        "value": "Exposure",
+        "type": "string",
+        "default": "Exposure"
+      },
+      "bind": "exposure"
+    }
+  ]
+}

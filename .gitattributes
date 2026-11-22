@@ -1,0 +1,4 @@
+* text=auto
+*.glb binary
+*.rgba8 binary
+*.png binary

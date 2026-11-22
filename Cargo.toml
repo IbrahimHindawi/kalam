@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["engine/runtime", "engine/host", "engine/xtask", "samples/ricochet", "samples/ricochet/window"]
+
+[profile.release]
+panic = "abort"
