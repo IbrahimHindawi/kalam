@@ -7,6 +7,7 @@ pub mod inline_fields;
 pub mod lens;
 pub mod material;
 pub mod mesh;
+pub mod msdf;
 pub mod scene;
 pub mod session;
 pub mod skin;

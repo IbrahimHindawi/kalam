@@ -20,3 +20,18 @@
 `engine/host/src/world_fx.rs` resolves texture and mesh IDs through the game's catalog. Pass the resulting draws to `render_view_at_fx` with the opaque scene. The transparent pass composites into HDR before tonemapping. It tests scene depth and preserves the HDR alpha channel that the editor uses for selection.
 
 A project can expose an ImGui pane through `Application::editor_tool`. The host owns docking and input. The project owns its documents, previews and save behavior. `KALAM_EDITOR_TOOL=1` opens the project pane on launch.
+
+## Game text
+
+Load an msdf-atlas-gen JSON descriptor with `kalam_runtime::msdf::Font::parse`.
+Upload its matching atlas once with `Assets::texture(rgba, width, height, false)`.
+The RGB channels contain distances in linear space. Use `Font::measure` and
+`Font::layout` with the same logical font size. The layout includes advances,
+kerning and line breaks. It accepts top-origin and bottom-origin descriptors.
+
+Keep the resulting `GlyphQuad` list with its panel. Each frame, pass the font,
+atlas handle, glyphs, logical panel size and drawable-pixel rectangle to
+`Assets::msdf_text`. The shader reads the atlas at the final screen scale.
+View 7 draws the text above both game panels and below ImGui. When a popup
+obscures existing labels on a panel, clip their quads before submission.
+Recreate the atlas texture when the device is recreated.

@@ -7,14 +7,14 @@
 
 #define INVALID UINT16_MAX
 #define VALID(handle) ((handle).idx != INVALID)
-enum { SHADOW, SCENE, TONE, SPRITE, SKIN_SHADOW, SKIN_SCENE, FX_QUADS, FX_MESH,
+enum { SHADOW, SCENE, TONE, SPRITE, SKIN_SHADOW, SKIN_SCENE, FX_QUADS, FX_MESH, MSDF_TEXT,
 #ifdef KALAM_NATIVE_EDITOR
        EDITOR_UI,
 #endif
        PASS_COUNT };
-enum { BASE, MATERIAL, LIGHT_DIR, LIGHT_COLOR, EYE, LIGHT_VP, FLAGS, EXPOSURE, OUTLINE_COLOR, TINT, FX_UV, FX_SCROLL, FX_OPACITY, FX_MAPS, FX_DISSOLVE, FX_WAVE, FX_WAVE_SHAPE, UNIFORM_COUNT };
+enum { BASE, MATERIAL, LIGHT_DIR, LIGHT_COLOR, EYE, LIGHT_VP, FLAGS, EXPOSURE, OUTLINE_COLOR, TINT, FX_UV, FX_SCROLL, FX_OPACITY, FX_MAPS, FX_DISSOLVE, FX_WAVE, FX_WAVE_SHAPE, MSDF_RANGE, UNIFORM_COUNT };
 enum { BASE_TEX, MATERIAL_TEX, SHADOW_TEX, IRRADIANCE, PREFILTER, DFG, SCREEN, SKIN_PALETTE, NORMAL_TEX, FX_OPACITY_TEX, FX_RAMP_TEX, FX_DISSOLVE_TEX, SAMPLER_COUNT };
-static const char *const pass_names[] = {"depth", "pbr", "tone", "sprite", "depth_skin", "pbr_skin", "world_fx", "mesh_fx"
+static const char *const pass_names[] = {"depth", "pbr", "tone", "sprite", "depth_skin", "pbr_skin", "world_fx", "mesh_fx", "msdf"
 #ifdef KALAM_NATIVE_EDITOR
                                         , "editor_ui"
 #endif
@@ -23,7 +23,7 @@ static const char *const uniform_names[] = {"u_baseColor",   "u_material", "u_li
                                             "u_lightColor",  "u_eye",      "u_lightViewProj",
                                             "u_cameraFlags", "u_exposure", "u_outlineColor", "u_tint",
                                             "u_fxUvRect", "u_fxScroll", "u_fxOpacity", "u_fxMaps",
-                                            "u_fxDissolve", "u_fxWave", "u_fxWaveShape"};
+                                            "u_fxDissolve", "u_fxWave", "u_fxWaveShape", "u_msdfRange"};
 static const char *const sampler_names[] = {"s_baseColor", "s_material", "s_shadow", "s_irradiance",
                                             "s_prefilter", "s_dfg",      "s_color", "s_skinPalette", "s_normal",
                                             "s_fxOpacity", "s_fxRamp", "s_fxDissolve"};
@@ -31,7 +31,7 @@ static bgfx_program_handle_t programs[PASS_COUNT];
 static bgfx_uniform_handle_t uniforms[UNIFORM_COUNT], samplers[SAMPLER_COUNT];
 static bgfx_texture_handle_t env[3];
 static bgfx_frame_buffer_handle_t shadow, hdr;
-static bgfx_vertex_layout_t vertex_layout, skin_layout, fx_layout;
+static bgfx_vertex_layout_t vertex_layout, skin_layout, fx_layout, text_layout;
 static bgfx_swap_chain_t swap;
 static unsigned frames;
 #ifdef KALAM_NATIVE_EDITOR
@@ -295,6 +295,11 @@ int renderer_open(void *native, uint32_t w, uint32_t h) {
     bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_TEXCOORD0, 2, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_TEXCOORD1, 4, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_end(&fx_layout);
+    bgfx_vertex_layout_begin(&text_layout, init.type);
+    bgfx_vertex_layout_add(&text_layout, BGFX_ATTRIB_POSITION, 2, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_add(&text_layout, BGFX_ATTRIB_COLOR0, 4, BGFX_ATTRIB_TYPE_UINT8, true, false);
+    bgfx_vertex_layout_add(&text_layout, BGFX_ATTRIB_TEXCOORD0, 2, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_end(&text_layout);
     bgfx_vertex_layout_begin(&skin_layout, init.type);
     bgfx_vertex_layout_add(&skin_layout, BGFX_ATTRIB_POSITION, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_add(&skin_layout, BGFX_ATTRIB_NORMAL, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
@@ -576,6 +581,55 @@ int kh_lens_draw(uint16_t order, uint32_t texture, uint16_t x, uint16_t y, uint1
 
 int kh_game_overlay(uint16_t order, uint32_t texture, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
     return panel_draw(order, texture, x, y, w, h, BGFX_STATE_BLEND_ALPHA);
+}
+
+int kh_msdf_text(uint32_t atlas, const kh_msdf_glyph *glyphs, uint32_t count,
+                 float unit_range_x, float unit_range_y,
+                 uint16_t clip_x, uint16_t clip_y, uint16_t clip_w, uint16_t clip_h,
+                 float scale_x, float scale_y) {
+    enum { TEXT_VIEW = 7 }; // Post-tonemap, above both game panels and below editor chrome.
+    typedef struct { float x, y; uint32_t rgba; float u, v; } text_vertex;
+    if (!count || !clip_w || !clip_h || clip_x >= swap.width || clip_y >= swap.height) return 1;
+    if (!open_device || !glyphs || !matches(atlas, tex_gen) || !VALID(textures[atlas % SLOTS]) ||
+        !(unit_range_x > 0.f && unit_range_y > 0.f && scale_x > 0.f && scale_y > 0.f) ||
+        count > 16384) return 0;
+    if (clip_w > swap.width - clip_x) clip_w = (uint16_t)(swap.width - clip_x);
+    if (clip_h > swap.height - clip_y) clip_h = (uint16_t)(swap.height - clip_y);
+
+    bgfx_transient_vertex_buffer_t vertices;
+    bgfx_transient_index_buffer_t indices;
+    // FX and text share the per-frame transient pools. Skip this panel's text
+    // on exhaustion and let its cached layout be submitted again next frame.
+    if (!bgfx_alloc_transient_buffers(&vertices, &text_layout, count * 4, &indices, count * 6, false))
+        return 1;
+    text_vertex *out = (text_vertex *)vertices.data;
+    uint16_t *index = (uint16_t *)indices.data;
+    const float left_origin = 2.f * clip_x / swap.width - 1.f;
+    const float top_origin = 1.f - 2.f * clip_y / swap.height;
+    const float sx = 2.f * scale_x / swap.width, sy = -2.f * scale_y / swap.height;
+    for (uint32_t i = 0; i < count; ++i) {
+        const kh_msdf_glyph *g = &glyphs[i];
+        const float left = left_origin + g->rect[0] * sx, right = left_origin + g->rect[2] * sx;
+        const float top = top_origin + g->rect[1] * sy, bottom = top_origin + g->rect[3] * sy;
+        uint32_t rgba;
+        memcpy(&rgba, g->color, sizeof(rgba));
+        *out++ = (text_vertex){left,  top,    rgba, g->uv[0], g->uv[1]};
+        *out++ = (text_vertex){right, top,    rgba, g->uv[2], g->uv[1]};
+        *out++ = (text_vertex){right, bottom, rgba, g->uv[2], g->uv[3]};
+        *out++ = (text_vertex){left,  bottom, rgba, g->uv[0], g->uv[3]};
+        for (unsigned j = 0; j < 6; ++j) *index++ = (uint16_t)(4 * i + quad_indices[j]);
+    }
+    const float range[] = {unit_range_x, unit_range_y, 0.f, 0.f};
+    bgfx_set_view_rect(TEXT_VIEW, 0, 0, (uint16_t)swap.width, (uint16_t)swap.height, 0, 1);
+    bgfx_set_view_mode(TEXT_VIEW, BGFX_VIEW_MODE_SEQUENTIAL);
+    bgfx_set_scissor(clip_x, clip_y, clip_w, clip_h);
+    bgfx_set_texture(0, samplers[SCREEN], textures[atlas % SLOTS], BGFX_SAMPLER_UVW_CLAMP);
+    bgfx_set_uniform(uniforms[MSDF_RANGE], range, 1);
+    bgfx_set_transient_vertex_buffer(0, &vertices, 0, count * 4);
+    bgfx_set_transient_index_buffer(&indices, 0, count * 6);
+    bgfx_set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA, 0);
+    bgfx_submit(TEXT_VIEW, programs[MSDF_TEXT], 0, BGFX_DISCARD_ALL);
+    return 1;
 }
 
 int kh_present(void) {

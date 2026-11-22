@@ -28,6 +28,19 @@ extern "C" {
     fn kh_lens_input(x: *mut f32, y: *mut f32) -> u32;
     fn kh_lens_draw(order: u16, texture: u32, x: u16, y: u16, w: u16, h: u16) -> i32;
     fn kh_game_overlay(order: u16, texture: u32, x: u16, y: u16, w: u16, h: u16) -> i32;
+    fn kh_msdf_text(
+        texture: u32,
+        glyphs: *const kalam_runtime::msdf::GlyphQuad,
+        count: u32,
+        unit_range_x: f32,
+        unit_range_y: f32,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        scale_x: f32,
+        scale_y: f32,
+    ) -> i32;
     pub(crate) fn kh_selected(dst: *mut u8, capacity: usize) -> usize;
     fn kh_walk_keys() -> u32;
     pub(crate) fn kh_editor_camera_input(pick_x: *mut f32, pick_y: *mut f32) -> u32;
@@ -206,6 +219,54 @@ impl Assets {
             && unsafe { kh_game_overlay(5 + u16::from(right), texture, x, y, width, height) } == 0
         {
             return Err("overlay submission failed".into());
+        }
+        Ok(())
+    }
+
+    /// Draw cached logical glyph quads into a drawable-pixel rectangle, above
+    /// the game overlays. The atlas must be uploaded as a linear texture.
+    pub fn msdf_text(
+        &self,
+        atlas: Handle<Texture>,
+        font: &kalam_runtime::msdf::Font,
+        glyphs: &[kalam_runtime::msdf::GlyphQuad],
+        design_size: [u32; 2],
+        target_rect: [u16; 4],
+    ) -> Result<(), String> {
+        let [x, y, w, h] = target_rect;
+        if glyphs.is_empty() || w == 0 || h == 0 {
+            return Ok(());
+        }
+        if design_size.contains(&0) {
+            return Err("MSDF panel has zero logical extent".into());
+        }
+        let texture = self
+            .textures
+            .get(atlas)
+            .ok_or("invalid MSDF atlas texture")?;
+        let [rx, ry] = font.unit_range();
+        let sx = f32::from(w) / design_size[0] as f32;
+        let sy = f32::from(h) / design_size[1] as f32;
+        // Four vertices per glyph, indexed locally with u16 indices.
+        for batch in glyphs.chunks(16384) {
+            let ok = unsafe {
+                kh_msdf_text(
+                    texture,
+                    batch.as_ptr(),
+                    batch.len() as u32,
+                    rx,
+                    ry,
+                    x,
+                    y,
+                    w,
+                    h,
+                    sx,
+                    sy,
+                )
+            };
+            if ok == 0 {
+                return Err("MSDF glyph submission failed".into());
+            }
         }
         Ok(())
     }

@@ -46,6 +46,7 @@ PROGRAMS = {
                 ["u_tint", "u_fxUvRect", "u_fxScroll", "u_fxOpacity", "u_fxMaps", "u_fxDissolve",
                  "u_fxWave", "u_fxWaveShape", "s_color", "s_fxOpacity", "s_fxRamp", "s_fxDissolve"]),
     "editor_ui": (["POSITION", "COLOR0", "TEXCOORD0"], [], ["s_color"]),
+    "msdf": (["POSITION", "COLOR0", "TEXCOORD0"], [], ["s_color", "u_msdfRange"]),
 }
 for name in ("pbr", "depth"):
     attrs, vs, fs = PROGRAMS[name]
