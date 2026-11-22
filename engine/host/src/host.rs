@@ -706,7 +706,10 @@ fn release_panel_texture(texture: &mut u32) {
 
 fn run(smoke: i32, name: &str, show_lens: bool) -> Result<(), String> {
     if let Some(application) = game::application(name) {
-        return application.run(smoke != 0);
+        unsafe { game::kh_game_handles_escape(application.handles_escape()) };
+        let result = application.run(smoke != 0);
+        unsafe { game::kh_game_handles_escape(false) };
+        return result;
     }
     let mut assets = Assets::default();
     let baseline = unsafe { kh_live_resources() };

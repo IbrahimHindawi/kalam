@@ -10,6 +10,7 @@ bool kh_ui_device_open(bgfx_program_handle_t program, bgfx_uniform_handle_t samp
 void kh_ui_device_close(void);
 void kh_ui_event(const SDL_Event *event);
 bool kh_ui_captures_keyboard(void);
+bool kh_ui_uses_escape(void);
 bool kh_ui_viewport_hit(float x, float y);
 bool kh_ui_viewport_rect(float rect[4]);
 bool kh_ui_take_frame_selection(void);
@@ -18,6 +19,7 @@ bool kh_ui_project_document(size_t index, bool open);
 bool kh_ui_request_close(void);
 bool kh_ui_reload(void);
 uint32_t kh_ui_play_session(void);
+void kh_ui_toggle_play_pause(void);
 bool kh_ui_viewport_key(const SDL_KeyboardEvent *event);
 bool kh_ui_gizmo_event(const SDL_Event *event);
 void kh_ui_gizmo_target(const char *id, const float *transform, const float *view_projection);

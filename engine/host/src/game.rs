@@ -18,6 +18,10 @@ pub trait Application: Sync {
     fn documents(&self) -> &[&str];
     fn validate(&self, documents: &[u8]) -> Result<(), String>;
     fn run(&self, smoke: bool) -> Result<(), String>;
+    /// Deliver Escape to this game's input while a play session is active.
+    fn handles_escape(&self) -> bool {
+        false
+    }
     fn smoke_document(&self) -> Option<(&str, &str)> {
         None
     }
@@ -72,6 +76,12 @@ pub fn play_session() -> PlaySession {
         },
         revision: value >> 2,
     }
+}
+
+/// Pause or resume the current play session. A stopped editor stays stopped.
+/// This preserves the session revision and shares the editor's Play/Pause button.
+pub fn toggle_pause() {
+    unsafe { kh_toggle_play_pause() };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -232,6 +242,8 @@ pub fn present_choices(title: &str, rows: &[ChoiceRow<'_>]) -> Result<(bool, Opt
 extern "C" {
     fn kh_viewport_rect(rect: *mut f32);
     fn kh_play_session() -> u32;
+    pub(crate) fn kh_game_handles_escape(enabled: bool);
+    fn kh_toggle_play_pause();
     fn kh_editor_project_document(index: usize, open: bool) -> bool;
     fn kh_editor_planar_gizmo(
         document: usize,
@@ -254,6 +266,8 @@ pub struct Input {
     pub secondary: bool,
     pub inspect: bool,
     pub interact: bool,
+    /// A fresh Escape press when the active application opts into handling it.
+    pub back: bool,
     pub pressed: [bool; 4],
 }
 
@@ -278,6 +292,7 @@ pub fn input(movement: [char; 4], actions: [char; 4]) -> Input {
         secondary: down(1024),
         inspect: down(2048),
         interact: down(4096),
+        back: down(8192),
         pressed: [down(64), down(128), down(256), down(512)],
     }
 }

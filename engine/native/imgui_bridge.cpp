@@ -256,6 +256,11 @@ void kh_ui_event(const SDL_Event *event) {
 
 bool kh_ui_captures_keyboard(void) { return ImGui::GetIO().WantCaptureKeyboard; }
 
+bool kh_ui_uses_escape(void) {
+    return ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive() ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+}
+
 bool kh_ui_viewport_key(const SDL_KeyboardEvent *event) {
     const auto mods = event->mod;
     const uint32_t mask = ((mods & SDL_KMOD_CTRL) ? 1u : 0u) |

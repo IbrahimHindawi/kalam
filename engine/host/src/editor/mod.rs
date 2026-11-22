@@ -1101,6 +1101,14 @@ extern "C" fn kh_ui_play_session() -> u32 {
     .unwrap_or(0)
 }
 #[no_mangle]
+extern "C" fn kh_ui_toggle_play_pause() {
+    editor(|ui| {
+        if ui.play != Play::Stopped {
+            ui.play_action(b'p');
+        }
+    });
+}
+#[no_mangle]
 extern "C" fn kh_ui_request_close() -> bool {
     editor(|ui| {
         if ui.quit || !ui.documents.values().any(Document::dirty) {

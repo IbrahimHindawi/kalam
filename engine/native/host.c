@@ -21,6 +21,10 @@ static uint64_t last_generation;
 static Uint64 previous;
 static unsigned lens_edges;
 static bool play_pressed[SDL_SCANCODE_COUNT];
+static bool game_handles_escape, game_back_pressed;
+#ifndef KALAM_NATIVE_EDITOR
+static bool play_paused;
+#endif
 static SDL_AudioStream *play_audio;
 static bool play_audio_attempted;
 #ifdef KALAM_NATIVE_EDITOR
@@ -233,8 +237,39 @@ uint32_t kh_play_session(void) {
 #ifdef KALAM_NATIVE_EDITOR
     return kh_ui_play_session();
 #else
-    return 1u;
+    return play_paused ? 2u : 1u;
 #endif
+}
+
+void kh_game_handles_escape(bool enabled) {
+    game_handles_escape = enabled;
+#ifndef KALAM_NATIVE_EDITOR
+    play_paused = false;
+#endif
+}
+
+void kh_toggle_play_pause(void) {
+#ifdef KALAM_NATIVE_EDITOR
+    kh_ui_toggle_play_pause();
+#else
+    play_paused = !play_paused;
+#endif
+}
+
+static bool dispatch_game_escape(const SDL_Event *event) {
+    if (!game_handles_escape || event->type != SDL_EVENT_KEY_DOWN || event->key.key != SDLK_ESCAPE)
+        return false;
+#ifdef KALAM_NATIVE_EDITOR
+    if ((kh_ui_play_session() & 3u) == 0)
+        return false;
+    if (kh_ui_uses_escape()) {
+        kh_ui_event(event);
+        return true;
+    }
+#endif
+    if (!event->key.repeat)
+        game_back_pressed = true;
+    return true;
 }
 
 bool kh_editor_project_document(size_t index, bool open) {
@@ -308,6 +343,7 @@ uint32_t kh_play_input(float cursor[2], float rect[4], const uint32_t bindings[8
     mouse = mouse && cursor[0] >= rect[0] && cursor[0] < rect[0] + rect[2] &&
         cursor[1] >= rect[1] && cursor[1] < rect[1] + rect[3];
     unsigned input = mouse ? 32u : 0u;
+    if (game_back_pressed && SDL_GetKeyboardFocus() == window) input |= 8192u;
     if (mouse && ((buttons & SDL_BUTTON_LMASK) || (lens_edges & 4u))) input |= 16u;
     if (mouse && (buttons & SDL_BUTTON_RMASK)) input |= 1024u;
     if (keyboard) {
@@ -358,6 +394,7 @@ int kh_next(float *dt, float *dx, float *dy, unsigned *w, unsigned *h) {
     int width = 0, height = 0, reload = 0;
     lens_edges = 0;
     SDL_zeroa(play_pressed);
+    game_back_pressed = false;
     if (test_lifecycle) {
         if (test_step == 0) {
             if (!SDL_SetWindowSize(window, 720, 480))
@@ -415,6 +452,10 @@ int kh_next(float *dt, float *dx, float *dy, unsigned *w, unsigned *h) {
             continue;
         if (e.type == SDL_EVENT_KEY_DOWN && kh_ui_viewport_key(&e.key))
             continue;
+#endif
+        if (dispatch_game_escape(&e))
+            continue;
+#ifdef KALAM_NATIVE_EDITOR
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.which != SDL_TOUCH_MOUSEID &&
             kh_ui_viewport_hit(e.button.x, e.button.y)) {
             if (e.button.button == SDL_BUTTON_RIGHT && (kh_ui_play_session() & 3u) != 1u) {
