@@ -111,6 +111,11 @@ fn two_socket_edges_sweep_and_mesh_uses_current_attachment_pose() {
     assert!(ribbon.len() >= 8);
     assert!(ribbon[0].0[0].distance(Vec3::ZERO) < 1e-5);
     assert!(ribbon.last().unwrap().0[1].x > 0.8);
+    assert_eq!(ribbon[0].1[0], 0.0);
+    assert!((ribbon.last().unwrap().1[2] - 1.0).abs() < 1e-5);
+    assert!(ribbon
+        .windows(2)
+        .all(|pair| (pair[0].1[2] - pair[1].1[0]).abs() < 1e-5));
     world.visit(Vec3::X, Vec3::Y, |draw| {
         if let FxDraw::Mesh { model, .. } = draw {
             assert!(
@@ -160,4 +165,8 @@ fn rejects_invalid_ranges_and_sheet_layouts_before_playback() {
         let file = json!({"version":1,"name":"invalid","effects":[layer]});
         assert!(FxAsset::parse(file.to_string().as_bytes()).is_err());
     }
+    assert!(FxAsset::parse(
+        br#"{"version":1,"name":"overflow","effects":[{"type":"mesh","mesh_scale":[1e120,1,1]}]}"#
+    )
+    .is_err());
 }
