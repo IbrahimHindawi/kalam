@@ -502,6 +502,13 @@ void ki_text(const char *begin, const char *end, bool disabled, bool wrapped) {
 bool ki_button(const char *label, float w, float h) { return ImGui::Button(label, {w, h}); }
 bool ki_selectable(const char *label, bool selected) { return ImGui::Selectable(label, selected); }
 bool ki_tree(const char *label) { return ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_DefaultOpen); }
+bool ki_project_file(const char *label) {
+    const bool activated = ImGui::Selectable(label, false, ImGuiSelectableFlags_AllowDoubleClick);
+    return activated && (!ImGui::IsItemHovered() || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
+}
+bool ki_project_folder(const char *label, bool expanded) {
+    return ImGui::TreeNodeEx(label, expanded ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+}
 void ki_end_tree(void) { ImGui::TreePop(); }
 void ki_push_id(const char *id) { ImGui::PushID(id); }
 void ki_pop_id(void) { ImGui::PopID(); }

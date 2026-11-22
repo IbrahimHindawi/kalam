@@ -1,5 +1,6 @@
 mod document;
 mod gizmo;
+mod project;
 pub(crate) mod tool;
 mod ui;
 
@@ -45,6 +46,7 @@ struct Editor {
     document: String,
     selection: String,
     project_documents: Vec<String>,
+    project: project::Browser,
     root: Option<PathBuf>,
     watched: BTreeMap<String, Option<SystemTime>>,
     documents: BTreeMap<String, Document>,
@@ -92,6 +94,7 @@ impl Editor {
             manifest: manifest.clone(),
             selection: String::new(),
             project_documents,
+            project: project::Browser::default(),
             root: std::env::var_os("KALAM_CONTENT_ROOT").map(PathBuf::from),
             watched: BTreeMap::new(),
             documents: BTreeMap::new(),
@@ -764,6 +767,13 @@ impl Editor {
         self.gizmo
             .draw(self.play != Play::Playing, &self.selection, &self.document);
         self.scene_panel();
+        if let Some(path) = self.project.draw(self.scene_dock, self.root.as_deref()) {
+            if self.document(&path).is_some() {
+                self.finish_form();
+                self.watch(&path);
+                self.select_document(&path);
+            }
+        }
         self.document_panel();
         if self.tool_open || tool_was_open {
             if let Some((name, draw)) = game::application(&self.scene).and_then(|app| app.editor_tool()) {

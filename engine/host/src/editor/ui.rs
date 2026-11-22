@@ -34,6 +34,8 @@ extern "C" {
     fn ki_selectable(label: *const c_char, selected: bool) -> bool;
     fn ki_tree(label: *const c_char) -> bool;
     pub fn ki_end_tree();
+    pub fn ki_project_file(label: *const c_char) -> bool;
+    pub fn ki_project_folder(label: *const c_char, expanded: bool) -> bool;
     fn ki_push_id(id: *const c_char);
     pub fn ki_pop_id();
     pub fn ki_bool(value: *mut bool) -> bool;
