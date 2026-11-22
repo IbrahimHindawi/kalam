@@ -1,7 +1,7 @@
 //! Rust interface for a statically linked game. The native host owns SDL and bgfx.
 pub use crate::host::{
     draws, entity_bounds, gpu_skinning_available, load_scene, pick_entity, render_view, render_view_at, upload,
-    Assets, Draw, RenderAssets,
+    render_view_at_fx, Assets, Draw, FxBlend, FxMesh, FxMeshSurface, FxOpacity, FxQuad, FxQuadSurface, RenderAssets, WorldFx,
 };
 pub use crate::panel::{Image as HudImage, WIDTH as HUD_WIDTH};
 pub use crate::resources::{Handle, Mesh, SkinPalette, Texture};
@@ -12,12 +12,19 @@ use glam::{Mat4, Vec2, Vec3};
 use kalam_runtime::scene::Camera;
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
+#[cfg(all(windows, feature = "editor"))]
+pub use crate::editor::tool::EditorUi;
 
 pub trait Application: Sync {
     fn scene(&self) -> &str;
     fn documents(&self) -> &[&str];
     fn validate(&self, documents: &[u8]) -> Result<(), String>;
     fn run(&self, smoke: bool) -> Result<(), String>;
+    /// An optional dockable project tool, drawn on the editor thread.
+    #[cfg(all(windows, feature = "editor"))]
+    fn editor_tool(&self) -> Option<(&'static str, fn(&mut EditorUi))> {
+        None
+    }
     /// Deliver Escape to this game's input while a play session is active.
     fn handles_escape(&self) -> bool {
         false

@@ -40,6 +40,11 @@ PROGRAMS = {
     "depth": (["POSITION"], ["u_modelViewProj"], []),
     "tone": (["POSITION", "TEXCOORD0"], [], ["u_exposure", "u_outlineColor", "s_color"]),
     "sprite": (["POSITION", "TEXCOORD0"], [], ["u_tint", "s_color"]),
+    "world_fx": (["POSITION", "COLOR0", "TEXCOORD0", "TEXCOORD1"], ["u_viewProj"],
+                 ["u_fxOpacity", "s_color", "s_fxRamp", "s_fxDissolve"]),
+    "mesh_fx": (["POSITION", "TEXCOORD0"], ["u_modelViewProj"],
+                ["u_tint", "u_fxUvRect", "u_fxScroll", "u_fxOpacity", "u_fxMaps", "u_fxDissolve",
+                 "u_fxWave", "u_fxWaveShape", "s_color", "s_fxOpacity", "s_fxRamp", "s_fxDissolve"]),
     "editor_ui": (["POSITION", "COLOR0", "TEXCOORD0"], [], ["s_color"]),
 }
 for name in ("pbr", "depth"):

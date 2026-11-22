@@ -7,28 +7,31 @@
 
 #define INVALID UINT16_MAX
 #define VALID(handle) ((handle).idx != INVALID)
-enum { SHADOW, SCENE, TONE, SPRITE, SKIN_SHADOW, SKIN_SCENE,
+enum { SHADOW, SCENE, TONE, SPRITE, SKIN_SHADOW, SKIN_SCENE, FX_QUADS, FX_MESH,
 #ifdef KALAM_NATIVE_EDITOR
        EDITOR_UI,
 #endif
        PASS_COUNT };
-enum { BASE, MATERIAL, LIGHT_DIR, LIGHT_COLOR, EYE, LIGHT_VP, FLAGS, EXPOSURE, OUTLINE_COLOR, TINT, UNIFORM_COUNT };
-enum { BASE_TEX, MATERIAL_TEX, SHADOW_TEX, IRRADIANCE, PREFILTER, DFG, SCREEN, SKIN_PALETTE, NORMAL_TEX, SAMPLER_COUNT };
-static const char *const pass_names[] = {"depth", "pbr", "tone", "sprite", "depth_skin", "pbr_skin"
+enum { BASE, MATERIAL, LIGHT_DIR, LIGHT_COLOR, EYE, LIGHT_VP, FLAGS, EXPOSURE, OUTLINE_COLOR, TINT, FX_UV, FX_SCROLL, FX_OPACITY, FX_MAPS, FX_DISSOLVE, FX_WAVE, FX_WAVE_SHAPE, UNIFORM_COUNT };
+enum { BASE_TEX, MATERIAL_TEX, SHADOW_TEX, IRRADIANCE, PREFILTER, DFG, SCREEN, SKIN_PALETTE, NORMAL_TEX, FX_OPACITY_TEX, FX_RAMP_TEX, FX_DISSOLVE_TEX, SAMPLER_COUNT };
+static const char *const pass_names[] = {"depth", "pbr", "tone", "sprite", "depth_skin", "pbr_skin", "world_fx", "mesh_fx"
 #ifdef KALAM_NATIVE_EDITOR
                                         , "editor_ui"
 #endif
 };
 static const char *const uniform_names[] = {"u_baseColor",   "u_material", "u_lightDir",
                                             "u_lightColor",  "u_eye",      "u_lightViewProj",
-                                            "u_cameraFlags", "u_exposure", "u_outlineColor", "u_tint"};
+                                            "u_cameraFlags", "u_exposure", "u_outlineColor", "u_tint",
+                                            "u_fxUvRect", "u_fxScroll", "u_fxOpacity", "u_fxMaps",
+                                            "u_fxDissolve", "u_fxWave", "u_fxWaveShape"};
 static const char *const sampler_names[] = {"s_baseColor", "s_material", "s_shadow", "s_irradiance",
-                                            "s_prefilter", "s_dfg",      "s_color", "s_skinPalette", "s_normal"};
+                                            "s_prefilter", "s_dfg",      "s_color", "s_skinPalette", "s_normal",
+                                            "s_fxOpacity", "s_fxRamp", "s_fxDissolve"};
 static bgfx_program_handle_t programs[PASS_COUNT];
 static bgfx_uniform_handle_t uniforms[UNIFORM_COUNT], samplers[SAMPLER_COUNT];
 static bgfx_texture_handle_t env[3];
 static bgfx_frame_buffer_handle_t shadow, hdr;
-static bgfx_vertex_layout_t vertex_layout, skin_layout;
+static bgfx_vertex_layout_t vertex_layout, skin_layout, fx_layout;
 static bgfx_swap_chain_t swap;
 static unsigned frames;
 #ifdef KALAM_NATIVE_EDITOR
@@ -286,6 +289,12 @@ int renderer_open(void *native, uint32_t w, uint32_t h) {
     bgfx_vertex_layout_add(&vertex_layout, BGFX_ATTRIB_NORMAL, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_add(&vertex_layout, BGFX_ATTRIB_TEXCOORD0, 2, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_end(&vertex_layout);
+    bgfx_vertex_layout_begin(&fx_layout, init.type);
+    bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_POSITION, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_COLOR0, 4, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_TEXCOORD0, 2, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_add(&fx_layout, BGFX_ATTRIB_TEXCOORD1, 4, BGFX_ATTRIB_TYPE_FLOAT, false, false);
+    bgfx_vertex_layout_end(&fx_layout);
     bgfx_vertex_layout_begin(&skin_layout, init.type);
     bgfx_vertex_layout_add(&skin_layout, BGFX_ATTRIB_POSITION, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
     bgfx_vertex_layout_add(&skin_layout, BGFX_ATTRIB_NORMAL, 3, BGFX_ATTRIB_TYPE_FLOAT, false, false);
@@ -447,6 +456,70 @@ int kh_draw_lit(uint16_t order, uint32_t mesh, const float *model, const float *
     bgfx_set_texture(7, samplers[NORMAL_TEX], textures[(normal_tex ? normal_tex : mr_tex) % SLOTS], UINT32_MAX);
     bgfx_set_state(state, 0);
     bgfx_submit(order, programs[palette ? SKIN_SCENE : SCENE], 0, BGFX_DISCARD_ALL);
+    return 1;
+}
+void kh_begin_fx(uint16_t order, const float *view, const float *proj) {
+    bgfx_set_view_mode(order, BGFX_VIEW_MODE_SEQUENTIAL);
+    bgfx_set_view_transform(order, view, proj);
+    bgfx_set_view_frame_buffer(order, hdr);
+    bgfx_set_view_rect(order, 0, 0, swap.width, swap.height, 0, 1);
+    bgfx_set_view_clear(order, BGFX_CLEAR_NONE, 0, 1, 0);
+}
+static bool fx_texture_valid(uint32_t id) {
+    return matches(id, tex_gen) && VALID(textures[id % SLOTS]);
+}
+static void fx_state(uint32_t flags) {
+    // The opaque pass stores signed depth/selection in HDR alpha for the outline.
+    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_MSAA;
+    if (!(flags & 2)) state |= BGFX_STATE_DEPTH_TEST_LEQUAL;
+    state |= (flags & 1) ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE)
+                         : BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+    bgfx_set_state(state, 0);
+}
+// The Rust caller fills four tightly packed position/color/UV/mask vertices per quad.
+// A full transient pool can shed decorative quads without interrupting gameplay.
+int kh_fx_quads(uint16_t order, const uint32_t maps[3], uint32_t flags, const float opacity[4],
+                const float *data, uint32_t count) {
+    if (!data || count > UINT16_MAX / 4) return -1;
+    for (int i = 0; i < 3; i++) if (!fx_texture_valid(maps[i])) return -1;
+    uint32_t available_v = bgfx_get_avail_transient_vertex_buffer(count * 4, &fx_layout) / 4;
+    uint32_t available_i = bgfx_get_avail_transient_index_buffer(count * 6, false) / 6;
+    if (count > available_v) count = available_v;
+    if (count > available_i) count = available_i;
+    if (!count) return 0;
+    bgfx_transient_vertex_buffer_t vertices;
+    bgfx_transient_index_buffer_t indices;
+    if (!bgfx_alloc_transient_buffers(&vertices, &fx_layout, count * 4, &indices, count * 6, false))
+        return 0;
+    memcpy(vertices.data, data, count * 4 * fx_layout.stride);
+    uint16_t *out = (uint16_t *)indices.data;
+    for (uint32_t i = 0; i < count; ++i)
+        for (size_t j = 0; j < 6; ++j)
+            *out++ = (uint16_t)(4 * i + quad_indices[j]);
+    bgfx_set_transient_vertex_buffer(0, &vertices, 0, count * 4);
+    bgfx_set_transient_index_buffer(&indices, 0, count * 6);
+    const int slots[] = {SCREEN, FX_RAMP_TEX, FX_DISSOLVE_TEX};
+    for (int i = 0; i < 3; i++)
+        bgfx_set_texture((uint8_t)i, samplers[slots[i]], textures[maps[i] % SLOTS], BGFX_SAMPLER_UVW_CLAMP);
+    bgfx_set_uniform(uniforms[FX_OPACITY], opacity, 1);
+    fx_state(flags);
+    bgfx_submit(order, programs[FX_QUADS], 0, BGFX_DISCARD_ALL);
+    return (int)count;
+}
+int kh_fx_mesh(uint16_t order, uint32_t mesh, uint32_t flags, const float *model,
+               const uint32_t maps[4], const float params[8][4]) {
+    if (!matches(mesh, mesh_gen) || !meshes[mesh % SLOTS].indices || meshes[mesh % SLOTS].joints)
+        return 0;
+    const int slots[] = {SCREEN, FX_OPACITY_TEX, FX_RAMP_TEX, FX_DISSOLVE_TEX};
+    for (int i = 0; i < 4; i++) if (!fx_texture_valid(maps[i])) return 0;
+    for (int i = 0; i < 4; i++)
+        bgfx_set_texture((uint8_t)i, samplers[slots[i]], textures[maps[i] % SLOTS],
+                         i == 2 ? BGFX_SAMPLER_UVW_CLAMP : 0); // mesh scrolling repeats
+    for (int i = 0; i < 8; i++) bgfx_set_uniform(uniforms[TINT + i], params[i], 1);
+    bind_mesh(mesh);
+    bgfx_set_transform(model, 1);
+    fx_state(flags);
+    bgfx_submit(order, programs[FX_MESH], 0, BGFX_DISCARD_ALL);
     return 1;
 }
 void kh_tonemap(uint16_t order, float multiplier, int show_outline) {

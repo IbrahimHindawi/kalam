@@ -4,7 +4,15 @@ use std::ffi::{c_char, c_void, CStr, CString};
 extern "C" {
     pub fn ki_dock(a: *const c_char, b: *const c_char, left: f32, right: f32);
     pub fn ki_begin(label: *const c_char) -> bool;
+    pub fn ki_tool_begin(label: *const c_char, open: *mut bool, dock: u32) -> bool;
+    pub fn ki_combo(label: *const c_char, value: *const c_char) -> bool;
+    pub fn ki_end_combo();
+    pub fn ki_slider(label: *const c_char, value: *mut f32, min: f32, max: f32) -> bool;
+    pub fn ki_color(label: *const c_char, rgba: *mut f32) -> bool;
+    pub fn ki_section(label: *const c_char, initially_open: bool) -> bool;
     pub fn ki_game_panel_begin(label: *const c_char, left: bool) -> bool;
+    pub fn ki_game_panel_end();
+    pub fn ki_game_button(label: *const c_char) -> bool;
     pub fn ki_end();
     pub fn ki_dock_id() -> u32;
     pub fn ki_begin_child(label: *const c_char, horizontal: bool) -> bool;

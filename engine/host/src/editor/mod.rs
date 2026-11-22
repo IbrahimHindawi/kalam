@@ -1,5 +1,6 @@
 mod document;
 mod gizmo;
+pub(crate) mod tool;
 mod ui;
 
 use crate::{game, host};
@@ -65,6 +66,8 @@ struct Editor {
     quit: bool,
     command: [u8; 512],
     scene_dock: u32,
+    tool_open: bool,
+    tool_save: Option<fn() -> Result<(), String>>,
     document_dock: u32,
     smoke: bool,
     smoke_frames: u32,
@@ -110,6 +113,8 @@ impl Editor {
             quit: false,
             command: [0; 512],
             scene_dock: 0,
+            tool_open: std::env::var_os("KALAM_EDITOR_TOOL").is_some(),
+            tool_save: None,
             document_dock: 0,
             smoke,
             smoke_frames: 0,
@@ -445,6 +450,11 @@ impl Editor {
         }
         let m = Metrics::get();
         let width = 30.;
+        if let Some((label, _)) = game::application(&self.scene).and_then(|app| app.editor_tool()) {
+            if button(label, 0., m.frame_height()) {
+                self.tool_open = !self.tool_open;
+            }
+        }
         unsafe { ki_cursor_x((m.width() - 2. * width - m.spacing()) * 0.5) };
         for stop in [false, true] {
             let disabled = stop && self.play == Play::Stopped;
@@ -703,7 +713,19 @@ impl Editor {
             if button("Cancel", 0., 0.) {
                 unsafe { ki_close_popup() };
             }
-            if discard || (save && self.publish(true)) {
+            let mut saved = save && self.publish(true);
+            if saved {
+                if let Some(save_tool) = self.tool_save {
+                    match save_tool() {
+                        Ok(()) => self.tool_save = None,
+                        Err(error) => {
+                            self.status = error;
+                            saved = false;
+                        }
+                    }
+                }
+            }
+            if discard || saved {
                 self.quit = true;
                 unsafe {
                     ki_quit();
@@ -734,6 +756,7 @@ impl Editor {
         if selection != self.selection {
             self.select(&selection);
         }
+        let tool_was_open = self.tool_open;
         self.toolbar();
         let (display, _) = frame_input();
         let right = (440. / (display.x * 0.83_f32)).clamp(0.32, 0.52);
@@ -742,6 +765,26 @@ impl Editor {
             .draw(self.play != Play::Playing, &self.selection, &self.document);
         self.scene_panel();
         self.document_panel();
+        if self.tool_open || tool_was_open {
+            if let Some((name, draw)) = game::application(&self.scene).and_then(|app| app.editor_tool()) {
+                if self.tool_open {
+                    let visible = unsafe {
+                        ki_tool_begin(c_string(name).as_ptr(), &mut self.tool_open, self.document_dock)
+                    };
+                    if visible && self.tool_open {
+                        let mut frame = tool::EditorUi::new(true);
+                        draw(&mut frame);
+                        self.tool_save = frame.save_draft;
+                    }
+                    unsafe { ki_end() };
+                }
+                if !self.tool_open {
+                    let mut frame = tool::EditorUi::new(false);
+                    draw(&mut frame);
+                    self.tool_save = frame.save_draft;
+                }
+            }
+        }
         self.popups();
     }
 
@@ -1000,7 +1043,7 @@ extern "C" fn kh_rs_draw() {
                     imgui::text(&row.label, true, false);
                     let enabled = left || row.enabled;
                     if !enabled { unsafe { ki_disabled(true); } }
-                    if imgui::button(name, -1., 0.) && !left && enabled {
+                    if unsafe { ki_game_button(c_string(name).as_ptr()) } && !left && enabled {
                         panel.picked = Some(index);
                     }
                     unsafe { ki_tooltip(detail.as_ptr()); }
@@ -1008,7 +1051,7 @@ extern "C" fn kh_rs_draw() {
                     unsafe { ki_pop_id(); }
                 }
             }
-            unsafe { ki_end(); }
+            unsafe { ki_game_panel_end(); }
         }
     });
 }
@@ -1111,7 +1154,7 @@ extern "C" fn kh_ui_toggle_play_pause() {
 #[no_mangle]
 extern "C" fn kh_ui_request_close() -> bool {
     editor(|ui| {
-        if ui.quit || !ui.documents.values().any(Document::dirty) {
+        if ui.quit || (ui.tool_save.is_none() && !ui.documents.values().any(Document::dirty)) {
             return true;
         }
         ui.modal = true;

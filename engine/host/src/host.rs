@@ -18,6 +18,9 @@ use std::ffi::{CStr, CString};
 use std::sync::Mutex;
 
 use crate::game;
+#[path = "world_fx.rs"]
+mod world_fx;
+pub use world_fx::{FxBlend, FxMesh, FxMeshSurface, FxOpacity, FxQuad, FxQuadSurface, WorldFx};
 
 pub(crate) static EDITOR_DOCUMENTS: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
@@ -188,7 +191,7 @@ impl Assets {
         let [x, y, width, height] = rect;
         if width != 0
             && height != 0
-            && unsafe { kh_lens_draw(4, texture, x, y, width, height) } == 0
+            && unsafe { kh_lens_draw(5, texture, x, y, width, height) } == 0
         {
             return Err("overlay submission failed".into());
         }
@@ -200,7 +203,7 @@ impl Assets {
         let texture = self.textures.get(handle).ok_or("invalid overlay texture")?;
         let [x, y, width, height] = rect;
         if width != 0 && height != 0
-            && unsafe { kh_game_overlay(4 + u16::from(right), texture, x, y, width, height) } == 0
+            && unsafe { kh_game_overlay(5 + u16::from(right), texture, x, y, width, height) } == 0
         {
             return Err("overlay submission failed".into());
         }
@@ -568,6 +571,19 @@ pub fn render_view_at(
     proj: Mat4,
     shadow_center: Vec3,
 ) -> Result<(), String> {
+    render_view_at_fx(list, assets, scene, eye, view, proj, shadow_center, &mut WorldFx::default())
+}
+
+pub fn render_view_at_fx(
+    list: &[Draw],
+    assets: &Assets,
+    scene: &Scene,
+    eye: Vec3,
+    view: Mat4,
+    proj: Mat4,
+    shadow_center: Vec3,
+    fx: &mut WorldFx,
+) -> Result<(), String> {
     let mut selection = [0; 64];
     let length = unsafe { kh_selected(selection.as_mut_ptr(), selection.len()) };
     let selected = std::str::from_utf8(&selection[..length]).unwrap_or_default();
@@ -615,7 +631,8 @@ pub fn render_view_at(
     // bgfx schedules view IDs in increasing order. Keep dependencies here with the scene.
     const SHADOW: u16 = 0;
     const OPAQUE: u16 = 1;
-    const TONEMAP: u16 = 2;
+    const TRANSPARENT: u16 = 2;
+    const TONEMAP: u16 = 3;
     let palette = |item: &Draw| -> Result<u32, String> {
         item.palette.map_or(Ok(0), |handle| {
             assets
@@ -686,6 +703,7 @@ pub fn render_view_at(
         }
         show_outline |= item.selected;
     }
+    fx.render(TRANSPARENT, assets, view, proj)?;
     unsafe { kh_tonemap(TONEMAP, scene.exposure, i32::from(show_outline)) };
     Ok(())
 }
@@ -950,11 +968,11 @@ fn run(smoke: i32, name: &str, show_lens: bool) -> Result<(), String> {
                 view,
                 projection,
             )?;
-            unsafe { kh_overlay(3, [1.; 4].as_ptr()) };
+            unsafe { kh_overlay(4, [1.; 4].as_ptr()) };
             if let Some(rect) = rect.filter(|_| panel_texture != 0) {
                 if unsafe {
                     kh_lens_draw(
-                        4,
+                        5,
                         panel_texture,
                         rect.x as u16,
                         rect.y as u16,
@@ -973,8 +991,8 @@ fn run(smoke: i32, name: &str, show_lens: bool) -> Result<(), String> {
                     .ok_or("invalid crosshair texture")?;
                 let (x, y) = (w as u16 / 2, h as u16 / 2);
                 unsafe {
-                    kh_lens_draw(5, white, x - 6, y, 13, 1);
-                    kh_lens_draw(6, white, x, y - 6, 1, 13);
+                    kh_lens_draw(6, white, x - 6, y, 13, 1);
+                    kh_lens_draw(7, white, x, y - 6, 1, 13);
                 }
             }
             let presented = unsafe { kh_present() };

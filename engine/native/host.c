@@ -646,7 +646,12 @@ static int run_host(int argc, char **argv) {
     if (window && !kh_ui_open(window, scene, smoke != 0))
         goto finish;
 #else
-    window = SDL_CreateWindow("Kalam", 960, 600, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef _WIN32
+    if (smoke && !test_lifecycle)
+        flags |= SDL_WINDOW_HIDDEN;
+#endif
+    window = SDL_CreateWindow("Kalam", 960, 600, flags);
 #endif
 #endif
     if (!window)

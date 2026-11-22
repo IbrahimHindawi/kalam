@@ -8,13 +8,15 @@
 #include <string>
 
 namespace {
-constexpr uint16_t UiView = 7;
+constexpr uint16_t UiView = 8;
 constexpr uint16_t Invalid = UINT16_MAX;
 struct Platform {
     bool smoke = false;
     Uint64 started = 0;
     std::string layoutPath, codeFontPath;
     ImFont *codeFont = nullptr;
+    ImFont *gameFont = nullptr;
+    bgfx_texture_handle_t panel{Invalid}, button{Invalid};
     ImGuiID dockspace = 0;
     bgfx_program_handle_t program{Invalid};
     bgfx_uniform_handle_t sampler{Invalid};
@@ -23,9 +25,46 @@ struct Platform {
 };
 Platform platform;
 
-ImU32 gridColor(uint32_t rgb) {
-    return IM_COL32((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255);
+std::string gameUiPath(const char *name) {
+    const char *root = SDL_getenv("KALAM_CONTENT_ROOT");
+    if (!root) root = SDL_getenv("KALAM_ASSET_ROOT");
+    const std::string base = root ? std::string(root) + "/" : std::string(SDL_GetBasePath()) + "assets/";
+    return base + "ui/" + name;
 }
+
+bgfx_texture_handle_t loadPanel(const char *name) {
+    SDL_Surface *source = SDL_LoadBMP(gameUiPath(name).c_str());
+    if (!source) return {Invalid};
+    SDL_Surface *rgba = SDL_ConvertSurface(source, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(source);
+    if (!rgba) return {Invalid};
+    bgfx_texture_handle_t texture{Invalid};
+    if (rgba->w > 0 && rgba->h > 0 && rgba->w <= 2048 && rgba->h <= 2048 &&
+        rgba->pitch == rgba->w * 4) {
+        texture = bgfx_create_texture_2d(uint16_t(rgba->w), uint16_t(rgba->h), false, 1,
+            BGFX_TEXTURE_FORMAT_RGBA8, BGFX_SAMPLER_UVW_CLAMP,
+            bgfx_copy(rgba->pixels, uint32_t(rgba->pitch * rgba->h)), 0);
+    }
+    SDL_DestroySurface(rgba);
+    return texture;
+}
+
+// Sange's authored 1024px backgrounds use 192px corners. Preserve them as
+// the equipment window changes size and stretch only the strips and center.
+void drawPanel(bgfx_texture_handle_t texture, ImVec2 pos, ImVec2 size, float border,
+               ImU32 tint = IM_COL32_WHITE) {
+    if (texture.idx == Invalid || size.x <= 0 || size.y <= 0) return;
+    const float bx = std::min(border, size.x * .5f), by = std::min(border, size.y * .5f);
+    const float x[] = {pos.x, pos.x+bx, pos.x+size.x-bx, pos.x+size.x};
+    const float y[] = {pos.y, pos.y+by, pos.y+size.y-by, pos.y+size.y};
+    constexpr float uv[] = {0.f, 192.f/1024.f, 1.f-192.f/1024.f, 1.f};
+    auto *draw = ImGui::GetWindowDrawList();
+    for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col)
+            draw->AddImage(texture.idx, {x[col],y[row]}, {x[col+1],y[row+1]},
+                           {uv[col],uv[row]}, {uv[col+1],uv[row+1]}, tint);
+}
+
 std::string installedNerdFont(const std::string &directory) {
     if (directory.empty()) return {};
     std::string best;
@@ -137,8 +176,7 @@ bool kh_ui_open(SDL_Window *window, const char *scene, bool smoke) {
             ? io.Fonts->AddFontFromFileTTF(path.c_str(), pixels, nullptr, ranges)
             : nullptr;
     };
-    io.FontDefault = loadFont(fonts + "segoeui.ttf", 16.f);
-    if (!io.FontDefault) io.FontDefault = io.Fonts->AddFontDefault();
+    platform.gameFont = loadFont(gameUiPath("Marcellus-Regular.ttf"), 17.f);
     static const ImWchar codeRanges[] = {
         0x0020, 0x024f, 0x0370, 0x052f, 0x2000, 0x2bff,
         0xe000, 0xf8ff, 0xf0000, 0xffffd, 0
@@ -170,40 +208,37 @@ bool kh_ui_open(SDL_Window *window, const char *scene, bool smoke) {
         platform.codeFont = loadFont(platform.codeFontPath, 15.f, codeRanges);
     }
     if (!platform.codeFont) platform.codeFont = io.Fonts->AddFontDefault();
+    io.FontDefault = platform.codeFont;
+    if (!platform.gameFont) platform.gameFont = io.FontDefault;
     auto &style = ImGui::GetStyle();
     ImGui::StyleColorsDark();
-    style.WindowPadding = ImVec2(12, 10);
-    style.FramePadding = ImVec2(7, 4);
-    style.ItemSpacing = ImVec2(8, 5);
+    style.WindowPadding = ImVec2(12, 12);
+    style.FramePadding = ImVec2(8, 4);
+    style.ItemSpacing = ImVec2(8, 8);
     style.IndentSpacing = 14;
-    style.WindowRounding = 3;
-    style.FrameRounding = 2;
-    style.FrameBorderSize = 1;
+    style.WindowRounding = style.FrameRounding = style.TabRounding = 0;
+    style.FrameBorderSize = 0;
     style.ScrollbarSize = 11;
-    const auto color = [&](ImGuiCol key, uint32_t rgb) {
-        style.Colors[key] = ImGui::ColorConvertU32ToFloat4(gridColor(rgb));
-    };
-    color(ImGuiCol_Text, 0xe3dfd8);
-    color(ImGuiCol_TextDisabled, 0xa39d94);
-    color(ImGuiCol_WindowBg, 0x303236);
-    color(ImGuiCol_PopupBg, 0x303236);
-    color(ImGuiCol_ChildBg, 0x292b2f);
-    color(ImGuiCol_Border, 0x46484c);
-    color(ImGuiCol_TitleBg, 0x35373b);
-    color(ImGuiCol_TitleBgActive, 0x3a3c40);
-    color(ImGuiCol_FrameBg, 0x242529);
-    color(ImGuiCol_FrameBgHovered, 0x35373b);
-    color(ImGuiCol_FrameBgActive, 0x3c3732);
-    color(ImGuiCol_Button, 0x3a3c40);
-    color(ImGuiCol_ButtonHovered, 0x494b50);
-    color(ImGuiCol_ButtonActive, 0x554233);
-    color(ImGuiCol_Header, 0x554233);
-    color(ImGuiCol_HeaderHovered, 0x49413b);
-    color(ImGuiCol_HeaderActive, 0x655040);
-    color(ImGuiCol_CheckMark, 0xdfa26c);
-    color(ImGuiCol_SliderGrab, 0xdfa26c);
-    color(ImGuiCol_SliderGrabActive, 0xf0bd90);
-    color(ImGuiCol_NavCursor, 0xdfa26c);
+    // Semantic colors from Gin's res/fx/fxed_ui_theme.json.
+    const ImVec4 panel(.01f,.01f,.01f,1), fold(.03f,.03f,.03f,1),
+        button(.10f,.10f,.10f,1), hot(.24f,.28f,.36f,.99f), active(.18f,.20f,.28f,1),
+        selected(.20f,.24f,.30f,.99f), track(.10f,.10f,.12f,.95f), fill(.30f,.50f,.95f,.95f);
+    auto &c = style.Colors;
+    c[ImGuiCol_Text] = {.9f,.9f,.9f,1};
+    c[ImGuiCol_TextDisabled] = {.55f,.57f,.60f,1};
+    c[ImGuiCol_WindowBg] = c[ImGuiCol_ChildBg] = c[ImGuiCol_PopupBg] = panel;
+    c[ImGuiCol_MenuBarBg] = c[ImGuiCol_TitleBg] = c[ImGuiCol_Header] = fold;
+    c[ImGuiCol_Border] = c[ImGuiCol_Separator] = {.17f,.18f,.20f,1};
+    c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TabSelected] = selected;
+    c[ImGuiCol_FrameBg] = c[ImGuiCol_Tab] = track;
+    c[ImGuiCol_Button] = button;
+    c[ImGuiCol_FrameBgHovered] = c[ImGuiCol_HeaderHovered] = c[ImGuiCol_ButtonHovered] = c[ImGuiCol_TabHovered] = hot;
+    c[ImGuiCol_FrameBgActive] = c[ImGuiCol_ButtonActive] = c[ImGuiCol_HeaderActive] = active;
+    c[ImGuiCol_CheckMark] = {.95f,.95f,.95f,1};
+    c[ImGuiCol_SliderGrab] = c[ImGuiCol_TabSelectedOverline] = c[ImGuiCol_NavCursor] = fill;
+    c[ImGuiCol_SliderGrabActive] = {1,1,1,1};
+    c[ImGuiCol_ScrollbarBg] = {.12f,.12f,.12f,.9f};
+    c[ImGuiCol_ScrollbarGrab] = {.35f,.35f,.35f,1};
     return true;
 }
 
@@ -236,10 +271,16 @@ bool kh_ui_device_open(bgfx_program_handle_t program, bgfx_uniform_handle_t samp
     ui.font = bgfx_create_texture_2d(width, height, false, 1, BGFX_TEXTURE_FORMAT_RGBA8,
                                      BGFX_SAMPLER_UVW_CLAMP, bgfx_copy(rgba, width * height * 4), 0);
     atlas->SetTexID(ui.font.idx);
+    ui.panel = loadPanel("panel.bmp");
+    ui.button = loadPanel("button.bmp");
     return ui.font.idx != Invalid;
 }
 
 void kh_ui_device_close(void) {
+    for (auto *texture : {&platform.panel, &platform.button}) {
+        if (texture->idx != Invalid) bgfx_destroy_texture(*texture);
+        texture->idx = Invalid;
+    }
     if (platform.font.idx != Invalid) {
         bgfx_destroy_texture(platform.font);
         platform.font.idx = Invalid;
@@ -348,6 +389,21 @@ void ki_dock(const char *sceneName, const char *documentName, float left, float 
     ImGui::DockSpaceOverViewport(id, viewport, flags);
 }
 bool ki_begin(const char *label) { return ImGui::Begin(label); }
+bool ki_tool_begin(const char *label, bool *open, uint32_t dock) {
+    if (dock) ImGui::SetNextWindowDockID(dock, ImGuiCond_FirstUseEver);
+    return ImGui::Begin(label, open);
+}
+bool ki_combo(const char *label, const char *value) { return ImGui::BeginCombo(label, value); }
+void ki_end_combo(void) { ImGui::EndCombo(); }
+bool ki_slider(const char *label, float *v, float lo, float hi) {
+    return ImGui::SliderFloat(label, v, lo, hi, "%.3g", ImGuiSliderFlags_AlwaysClamp);
+}
+bool ki_color(const char *label, float rgba[4]) {
+    return ImGui::ColorEdit4(label, rgba, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+}
+bool ki_section(const char *label, bool open) {
+    return ImGui::CollapsingHeader(label, open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+}
 bool ki_game_panel_begin(const char *label, bool left) {
     float rect[4];
     if (kh_ui_viewport_rect(rect)) {
@@ -356,12 +412,56 @@ bool ki_game_panel_begin(const char *label, bool left) {
                                ImGuiCond_Always, ImVec2(left ? 1.f : 0.f, 0.f));
         ImGui::SetNextWindowSize(ImVec2(SDL_min(244.f, rect[2] * 0.47f), 0.f), ImGuiCond_Always);
     }
-    const bool visible = ImGui::Begin(label, nullptr, ImGuiWindowFlags_AlwaysAutoResize |
+    ImGui::PushFont(platform.gameFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16,16));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232,227,216,255));
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, IM_COL32(188,183,169,255));
+    ImGui::PushStyleColor(ImGuiCol_Separator, IM_COL32(116,106,85,180));
+    const bool framed = platform.panel.idx != Invalid;
+    const bool visible = ImGui::Begin(label, nullptr, (framed ? ImGuiWindowFlags_NoBackground : 0) |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    if (visible) {
+        if (framed) {
+            auto *draw = ImGui::GetWindowDrawList();
+            const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+            draw->PushClipRect(pos, {pos.x + size.x, pos.y + size.y}, false);
+            drawPanel(platform.panel, pos, size, 32.f);
+            draw->PopClipRect();
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232,204,145,255));
+        ImGui::TextUnformatted(label);
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+    }
     if (ImGui::IsWindowFocused() || ImGui::IsWindowHovered())
         ImGui::SetNextFrameWantCaptureKeyboard(false);
     return visible;
+}
+void ki_game_panel_end(void) {
+    ImGui::End();
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    ImGui::PopFont();
+}
+bool ki_game_button(const char *label) {
+    if (platform.button.idx == Invalid) return ImGui::Button(label, {-1,0});
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 size(std::max(1.f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight()+4.f);
+    const bool pressed = ImGui::InvisibleButton(label, size, ImGuiButtonFlags_EnableNav);
+    const ImU32 tint = ImGui::IsItemActive() ? IM_COL32(174,181,192,255) :
+        ImGui::IsItemHovered() ? IM_COL32_WHITE : IM_COL32(203,209,216,255);
+    drawPanel(platform.button, pos, size, 11.f, tint);
+    const float textWidth = ImGui::CalcTextSize(label).x;
+    auto *dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(pos, {pos.x+size.x,pos.y+size.y}, true);
+    dl->AddText({pos.x+std::max(4.f,(size.x-textWidth)*.5f),pos.y+(size.y-ImGui::GetFontSize())*.5f},
+                ImGui::GetColorU32(ImGuiCol_Text), label);
+    dl->PopClipRect();
+    if (ImGui::IsItemFocused())
+        dl->AddRect(pos, {pos.x+size.x,pos.y+size.y}, IM_COL32(232,204,145,255));
+    return pressed;
 }
 void ki_end(void) { ImGui::End(); }
 uint32_t ki_dock_id(void) { return ImGui::GetWindowDockID(); }
